@@ -1,0 +1,23 @@
+services:
+  subconverter-extended:
+    image: aethersailor/subconverter-extended:v1.9.6
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      SUBCONVERTER_SECURITY_PROFILE: lan
+      SUBCONVERTER_ALLOW_PUBLIC_UPLOAD: 'false'
+    volumes:
+      - ./pref.toml:/base/pref.toml:ro
+    # No ports published. Only containers on the selected network can call it.
+    networks:
+      - xboard
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '2'
+
+networks:
+  xboard:
+    external: true
+    name: ${XBOARD_NETWORK:?Set XBOARD_NETWORK to the existing XBoard Docker network}

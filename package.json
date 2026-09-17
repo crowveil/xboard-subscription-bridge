@@ -1,0 +1,19 @@
+{
+  "name": "xboard-subscription-bridge",
+  "private": true,
+  "description": "Development tools for XBoard Subscription Bridge",
+  "author": "crowveil",
+  "license": "MIT",
+  "repository": "github:crowveil/xboard-subscription-bridge",
+  "scripts": {
+    "test": "node tests/ui_dom.cjs",
+    "test:browser": "node tests/ui_smoke.cjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "playwright": "1.55.1",
+    "prettier": "3.6.2"
+  }
+}

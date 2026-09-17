@@ -1,0 +1,22 @@
+{
+  "name": "订阅桥接",
+  "code": "external_node_bridge",
+  "version": "0.1.0",
+  "type": "feature",
+  "description": "按 XBoard 权限组分发外部节点。保存后从插件说明打开管理控制台；关闭控制台不影响订阅。",
+  "author": "crowveil",
+  "config": {
+    "converter_url": {
+      "type": "string",
+      "default": "http://subconverter-extended:25500",
+      "label": "转换服务内网地址",
+      "description": "完整来源、权限组和诊断在独立控制台管理。现有配置会自动保留。"
+    },
+    "console_open": {
+      "type": "boolean",
+      "default": false,
+      "label": "开放管理控制台（60 分钟）",
+      "description": "开启并保存，然后点击插件说明中的“打开控制台”。仍需当前 XBoard 管理员登录。到期或关闭后，管理接口停止接受访问，订阅分发继续运行。"
+    }
+  }
+}

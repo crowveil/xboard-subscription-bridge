@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>XBoard 订阅桥接 · 管理控制台</title>
+    <link rel="stylesheet" href="console.css?v=f5d75af583cd" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <span class="eyebrow" id="plugin-version">XBOARD PLUGIN</span>
+          <h1>XBoard 订阅桥接</h1>
+          <p>来源集中管理，按权限组分发。</p>
+        </div>
+        <a href="/" class="button secondary">返回 XBoard</a>
+      </header>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section id="landing" class="card">
+        <h2 id="access-title">正在检查管理员登录状态…</h2>
+        <p id="summary"></p>
+        <p id="access-help">请先在同一域名登录 XBoard 管理后台。</p>
+        <button id="enter" hidden>进入控制台</button
+        ><button id="retry" class="secondary">重新检查</button>
+      </section>
+      <div id="workspace" hidden>
+        <div class="toolbar">
+          <div>
+            <strong>管理访问已开放</strong><span id="remaining"></span
+            ><span id="dirty" class="badge" hidden>未保存</span>
+          </div>
+          <div class="actions">
+            <button id="renew" class="secondary">续期 60 分钟</button><button id="save">保存</button
+            ><button id="close" class="danger">关闭控制台</button>
+          </div>
+        </div>
+        <nav aria-label="控制台栏目">
+          <button data-tab="sources" class="tab active">订阅来源</button
+          ><button data-tab="service" class="tab">转换服务</button
+          ><button data-tab="diagnostics" class="tab">运行与调试</button>
+        </nav>
+        <section id="tab-sources" class="card tabpanel">
+          <div class="section-head">
+            <div>
+              <h2>订阅来源</h2>
+              <p>未选择权限组的来源不会刷新或分发。修改后先保存，再刷新节点。</p>
+            </div>
+            <button id="add" class="secondary">＋ 添加来源</button>
+          </div>
+          <div id="sources"></div>
+          <p id="empty" class="empty">还没有来源。添加订阅地址并选择可以使用它的权限组。</p>
+          <details>
+            <summary>从旧模板迁移时需要做什么？</summary>
+            <p>
+              移除模板中旧外部节点的 proxy-providers 和策略组 use
+              引用，防止绕过权限组继续分发；rule-providers 可以保留。
+            </p>
+          </details>
+        </section>
+        <section id="tab-service" class="card tabpanel" hidden>
+          <div class="section-head">
+            <div>
+              <h2>转换服务</h2>
+              <p>由服务器访问内网转换器。无需将转换端口开放到公网。</p>
+            </div>
+            <button id="health" class="secondary">检测连接与版本</button>
+          </div>
+          <label>内网地址<input id="converter_url" type="url" required /></label>
+          <p id="version-state" class="status-box">尚未检测版本</p>
+          <details>
+            <summary>高级设置</summary>
+            <div class="form-grid">
+              <label>上游请求 User-Agent<input id="upstream_user_agent" type="text" /></label
+              ><label>请求超时（秒）<input id="timeout" type="number" min="2" max="30" /></label
+              ><label
+                >缓存最长保留（小时）<input id="max_stale" type="number" min="1" max="168"
+              /></label>
+            </div>
+            <p>
+              默认 clash.meta 用于请求上游 Mihomo 格式，保留 XHTTP
+              等扩展字段；它不改变最终输出格式。修改地址或 UA 后需保存并刷新。
+            </p>
+            <label
+              >Clash／Clash Meta／Stash 接收策略组（每行一个）<textarea
+                id="mihomo_groups"
+                rows="4"
+              ></textarea></label
+            ><label
+              >Sing-box 接收策略组（留空：所有 selector／urltest）<textarea
+                id="singbox_groups"
+                rows="2"
+              ></textarea></label
+            ><label
+              >Surge／Surfboard 接收策略组（留空：所有可选择的策略组）<textarea
+                id="ini_groups"
+                rows="2"
+              ></textarea></label
+            ><label
+              >要移除的旧节点 provider 名称（每行一个）<textarea
+                id="remove_provider_keys"
+                rows="2"
+              ></textarea>
+            </label>
+          </details>
+        </section>
+        <section id="tab-diagnostics" class="card tabpanel" hidden>
+          <div class="section-head">
+            <div>
+              <h2>运行与调试</h2>
+              <p>日志只记录脱敏事件和数量。开启 Debug 后持续 60 分钟。</p>
+            </div>
+            <div class="actions">
+              <button id="debug" class="secondary">开启 Debug</button
+              ><button id="export" class="secondary">导出诊断</button>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="refresh-all">立即刷新全部</button
+            ><button id="reload-status" class="secondary">更新状态</button>
+          </div>
+          <p>
+            逐个重新转换已启用且分配权限组的来源。转换器版本变化也会自动安排刷新；临时网络故障保留仍有效的旧缓存。
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>来源</th>
+                  <th>格式</th>
+                  <th>节点</th>
+                  <th>最近成功</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody id="states"></tbody>
+            </table>
+          </div>
+          <details>
+            <summary>最近调试事件</summary>
+            <pre id="events"></pre>
+          </details>
+        </section>
+      </div>
+      <footer>关闭的是管理访问；后台刷新和用户订阅始终独立运行。</footer>
+    </main>
+    <dialog id="close-dialog">
+      <h2>有尚未保存的修改</h2>
+      <p>请选择保存修改，或放弃本次编辑后关闭管理访问。</p>
+      <div class="actions">
+        <button id="save-close">保存并关闭</button
+        ><button id="discard-close" class="danger">放弃并关闭</button
+        ><button id="cancel-close" class="secondary">继续编辑</button>
+      </div>
+    </dialog>
+    <script src="console.js?v=1120365e9e10" defer></script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+# Private node-list converter for XBoard Subscription Bridge, tested with SCE v1.9.5/1.9.6.
+version = 1
+[common]
+default_external_config = "data:,%5Bcustom%5D%0Aenable_rule_generator=false"
+base_path = "base"
+proxy_subscription = "NONE"
+enable_insert = false
+[node_pref]
+clash_use_new_field_name = true
+[managed_config]
+[surge_external_proxy]
+[emojis]
+[ruleset]
+enabled = false
+[template]
+template_path = ""
+[server]
+listen = "0.0.0.0"
+port = 25500
+serve_file_root = ""
+[security]
+profile = "lan"
+[statistics]
+enabled = false
+[advanced]
+log_level = "warn"
+print_debug_info = false
+resource_control = "compat"
+max_concurrent_threads = 4
