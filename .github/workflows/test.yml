@@ -30,6 +30,7 @@ jobs:
       - run: python3 tools/build.py --check
       - run: composer test
       - run: npm test
+      - run: python3 -m unittest discover -s tests -p 'test_publish.py' -v
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - run: python3 tools/build.py --package

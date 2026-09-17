@@ -26,7 +26,7 @@ try {
             echo "备份已恢复。\n";
         } else {
             $backup = $installer->apply();
-            echo "已迁移至公开版 0.1.0；配置和缓存已保留。备份：".$backup."\n";
+            echo "已迁移至公开版 ".$installer->inspect()['release']."；配置和缓存已保留。备份：".$backup."\n";
         }
         echo "重启 XBoard 常驻进程，然后运行 php artisan up；不要重新安装或卸载插件。\n";
     } else {

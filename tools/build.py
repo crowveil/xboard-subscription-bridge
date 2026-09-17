@@ -26,6 +26,8 @@ ROOT_FILES = {
     "phpunit.xml",
     "pint.json",
     "upgrade.php",
+    "publish.sh",
+    "RELEASE_BASE",
 }
 SOURCE_DIRS = {"ExternalNodeBridge", "deploy", "docs", "tests", "tools", ".github"}
 EXCLUDED = {"runtime", "__pycache__", "node_modules", "vendor", ".local"}

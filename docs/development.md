@@ -9,6 +9,7 @@ composer install
 npm ci
 composer test
 npm test
+python3 -m unittest discover -s tests -p 'test_publish.py' -v
 ```
 
 PHP 测试使用固定 XBoard 源码和合成凭据，覆盖原生鉴权、权限隔离、11 个生成器、缓存失败回退、协议字段、控制台开关、安装升级和迁移回退。没有本地转换器时，3 个转换器用例会跳过。
@@ -53,5 +54,7 @@ npm run format:check
 3. 按身份规则检查仓库本地配置和实际作者 / 提交者，检查暂存内容，然后提交。
 4. `python3 tools/build.py --package` 生成 `dist/<版本>/` 下的安装 ZIP、源码 ZIP 和 SHA256SUMS。构建使用明确的目录和文件白名单，排除依赖、测试运行数据和本机配置。
 5. 验证远端账户、仓库及待推送提交；发布 tag 和 Release 前再次检查身份。
+
+下载源码后可按 [Debian 发布流程](publishing.md) 执行 `bash publish.sh --check` 和 `bash publish.sh`。发布脚本无需本地已有 Git 历史；会克隆现有 main，在其历史上追加提交，且不会直接操作工作目录的 remote。每次准备后续版本时，将根目录 `RELEASE_BASE` 更新为所基于的远端 main 完整提交 SHA。
 
 代表 crowveil 发布时运行 `python3 tools/check_identity.py --history`，使用仓库级身份，不修改全局 Git 设置。该检查不会验证 GitHub 登录账号；推送前仍须单独核对认证账户和 remote。

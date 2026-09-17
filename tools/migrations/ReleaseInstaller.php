@@ -52,8 +52,9 @@ final class ReleaseInstaller
     {
         $row = $this->row();
         $manifest = json_decode(file_get_contents($this->source.'/config.json'), true, 64, JSON_THROW_ON_ERROR);
+        $release = json_decode(file_get_contents(dirname(__DIR__, 2).'/ExternalNodeBridge/config.json'), true, 64, JSON_THROW_ON_ERROR);
         $old = json_decode(file_get_contents($this->destination.'/config.json'), true, 64, JSON_THROW_ON_ERROR);
-        if (($manifest['code'] ?? '') !== 'external_node_bridge' || ($old['code'] ?? '') !== 'external_node_bridge' || $manifest['version'] !== '0.1.0') {
+        if (($manifest['code'] ?? '') !== 'external_node_bridge' || ($old['code'] ?? '') !== 'external_node_bridge' || $manifest['version'] !== $release['version']) {
             throw new RuntimeException('插件标识或发布版本不匹配。');
         }
         if (!in_array($row->version, ['0.1.0','0.1.1'], true)) {
@@ -155,10 +156,10 @@ final class ReleaseInstaller
             throw new RuntimeException('目录复制失败。');
         }
     }
-    private static function write(string $file,string $data): void
+    private static function write(string $file, string $data): void
     {
-        if (file_put_contents($file,$data) === false) {
+        if (file_put_contents($file, $data) === false) {
             throw new RuntimeException('无法写入迁移状态。');
-        }chmod($file,0600);
+        }chmod($file, 0600);
     }
 }

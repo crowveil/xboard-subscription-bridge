@@ -55,7 +55,7 @@ final class ReleaseInstallerTest extends BridgeTestCase
         $this->cache('a', 'mihomo', [self::node()]);
         $installer = new ReleaseInstaller(dirname(__DIR__).'/ExternalNodeBridge', $dir, $public);
         $backup = $installer->apply();
-        $this->assertSame('0.1.0', App\Models\Plugin::first()->version);
+        $this->assertSame(Plugin\ExternalNodeBridge\Services\Metadata::version(), App\Models\Plugin::first()->version);
         $this->assertSame($this->settings['sources'], Plugin\ExternalNodeBridge\Services\Settings::load()['sources']);
         $this->assertFalse(Plugin\ExternalNodeBridge\Services\ConsoleAccess::status()['open']);
         $this->assertStringContainsString('EXTERNAL_PASSWORD', $this->subscribe('user-a-token')->getContent());
@@ -63,7 +63,7 @@ final class ReleaseInstallerTest extends BridgeTestCase
         $this->assertStringNotContainsString('UPSTREAM_SECRET', file_get_contents($backup.'/database.enc'));
         $installer->restore($backup);
         $this->assertSame('0.1.1', App\Models\Plugin::first()->version);
-        $this->assertSame('old plugin',file_get_contents($dir.'/README.md'));
-        $this->assertSame('old public',file_get_contents($public.'/console.html'));
+        $this->assertSame('old plugin', file_get_contents($dir.'/README.md'));
+        $this->assertSame('old public', file_get_contents($public.'/console.html'));
     }
 }

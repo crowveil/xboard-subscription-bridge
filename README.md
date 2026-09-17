@@ -18,7 +18,7 @@
 1. 在 XBoard 所在的 Docker 网络中部署转换器，参考 [部署说明](docs/deployment.md)。
 2. 上传发布包中的 `ExternalNodeBridge-<版本>.zip`，启用「订阅桥接」。
 3. 在插件配置中填写转换器地址，开启「开放管理控制台」并保存。
-4. 点击插件说明中的「打开管理控制台」，添加来源、授权权限组，然后保存并刷新。
+4. 复制配置弹窗中自动显示的完整控制台地址，在浏览器打开，添加来源、授权权限组，然后保存并刷新。
 
 控制台路径为 `/plugins/external_node_bridge/console.html`，需要同域 XBoard 管理员登录。关闭控制台不影响后台刷新和订阅分发。
 
@@ -29,6 +29,7 @@
 - [架构](docs/architecture.md)：鉴权、转换、合并和控制台生命周期。
 - [开发与测试](docs/development.md)：安装依赖、回归验证与打包。
 - [迁移](docs/migration.md)：早期内部版本保留配置的迁移与回退。
+- [Debian 发布流程](docs/publishing.md)：在源码根目录运行 `bash publish.sh`，检查身份后推送代码及 Release。
 - [更新记录](ExternalNodeBridge/CHANGELOG.md)。
 
 ## 兼容范围

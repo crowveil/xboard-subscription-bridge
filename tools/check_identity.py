@@ -14,11 +14,15 @@ def git(*args):
 
 
 def main():
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, help="Check a separate release checkout")
     parser.add_argument(
         "--history", action="store_true", help="Check all commits reachable from HEAD"
     )
     args = parser.parse_args()
+    if args.repo:
+        ROOT = args.repo.resolve()
     if (
         git("config", "--local", "user.name") != NAME
         or git("config", "--local", "user.email") != EMAIL
