@@ -1,35 +1,61 @@
 # 在 Debian 发布
 
-源码根目录包含 `publish.sh`。已安装并登录 `gh` 后，还需要 `git` 和 `python3`；发布现成源码不需要 PHP、Composer 或 Node.js。
+发布入口位于源码根目录。Debian 机器只负责核验账号、审阅源码差异、向 `main` 推送提交并触发 GitHub Actions；PHP、Composer、Node.js、npm、浏览器测试、打包、标签和 GitHub Release 都在 GitHub 托管环境中完成。
 
-解压本版本源码 ZIP，进入含 `publish.sh` 的目录：
+## 本机要求
+
+```bash
+sudo apt update
+sudo apt install -y git gh python3
+gh auth login
+gh auth status
+```
+
+必须使用 GitHub 账号 `crowveil`。发布工具使用临时克隆以及仓库级身份 `crowveil <330225440+crowveil@users.noreply.github.com>`，不修改全局 Git 配置，不复用下载目录中的 Git 历史。
+
+## 正常发布新版本
+
+准备好版本号、CHANGELOG、`docs/releases/v<版本>.md`，并把 `RELEASE_BASE` 更新为修改所基于的远端 `main` 完整提交 SHA。然后运行：
 
 ```bash
 bash publish.sh --check
 bash publish.sh
 ```
 
-第一条只检查和构建，不创建提交、标签或 Release。第二条显示实际暂存差异，确认没有私人信息或真实凭据后，输入 `publish` 执行发布。
+第一条命令仅核验账号、远端、版本、控制台资源散列以及待提交差异，不进行远端写操作。正式发布要求输入 `PUBLISH v<版本>`。
 
-脚本会执行：
+脚本随后：
 
-1. 用 `gh api user` 核实实际账号为 `crowveil`，检查登录状态及目标仓库 `crowveil/xboard-subscription-bridge`。
-2. 在临时目录克隆已有 `main`，仅设置临时仓库的作者、提交者及关闭自动签名。通过当前 `gh` 的 HTTPS 凭据推送，不使用 SSH 密钥或其他缓存的 Git 凭据。
-3. 核验完整提交历史、本地与有效 Git 身份，以及远端地址；按构建白名单应用源码，检查并展示暂存差异。
-4. 验证 `RELEASE_BASE`，避免覆盖其他更新；构建安装 ZIP、源码 ZIP 和只包含这两个文件的 SHA256SUMS。
-5. 创建新提交与带说明的版本标签，原子推送 `main` 和该标签，不强制推送、不重写旧历史。
-6. 创建 Release 草稿，上传并下载校验全部附件后，才正式发布并标记 Latest。
+1. 将经过白名单筛选的源码应用到临时克隆，检查 `RELEASE_BASE`，并向 `main` 普通推送一个提交。
+2. 等待 `Tests` 工作流在该提交上成功。
+3. 触发 `Release` 工作流并等待结果。
+4. `Release` 工作流再次确认这个精确提交已有成功的 `Tests` 记录，然后执行确定性打包。
+5. 检查通过后才创建标签和 Release 草稿；上传并重新下载三个附件核对 SHA256 后公开发布。
 
-作者、提交者和标签作者均为 `crowveil <330225440+crowveil@users.noreply.github.com>`。脚本不改全局 Git 配置、不更换工作目录的 remote、不切换账号、不创建凭据，不会把旧的本机 Git 历史推上去。
+已经公开的版本默认不可覆盖；发现问题时应递增补丁版本。
 
-## 中断和冲突
+## 一次性修正 v0.1.1
 
-- 网络中断后可以再次运行。远端源码必须完全一致，标签必须指向相同提交，已有附件必须与本地 SHA256 一致；草稿缺失的附件可继续上传。
-- 已公开 Release 的附件不会被覆盖或补写。若内容不同，请递增版本发布。
-- `main` 出现其他提交、登录账号不符、存在 URL 重写或作者环境变量覆盖时停止并说明原因，不自动修复这些冲突。
-- 临时目录在退出时清理，原始源码不改动。失败信息不要未经检查就复制到公开 Issue。
-- `--check` 会访问 GitHub、克隆仓库和本地构建，但没有远端写操作；它不是 PHP / 客户端功能测试。
+早期 `v0.1.1` 的本地重发脚本错误地要求 Debian 安装 PHP、Composer、Node.js 和 npm。修正版源码提供一次性入口：
 
-## 准备后续版本
+```bash
+bash publish.sh --check
+bash publish.sh --repair-0.1.1
+```
 
-更新 `ExternalNodeBridge/config.json` 的版本、CHANGELOG，以及 `docs/releases/v<版本>.md`。将 `RELEASE_BASE` 更新为此次修改所基于的远端 `main` 完整提交 SHA。先按开发文档运行回归测试，再发布。脚本不会自动合并远端的新变化，也不会覆盖同名旧版本。
+正式执行时输入 `REPUBLISH v0.1.1`。只有 `v0.1.1` 允许走这条覆盖路径，并且旧标签必须指向原始发布提交 `01eabc2eccc89e068a486980c08e2b2e4def2391` 或本次待发布提交。工作流使用带旧标签对象 SHA 的 `--force-with-lease`，标签在验证期间被其他操作修改时会停止。已有公开 Release 的附件只会在测试和打包通过后逐一覆盖，不能保证三个附件同时替换；网络中断时重新运行同一命令即可继续校验和补齐。GitHub 的不可变 Release 设置如果禁止覆盖，脚本会停止，不尝试绕过。
+
+本次只使用根目录的 `publish.sh`，不要从旧下载包复制 `republish-v0.1.1.sh`。`--check` 不运行 PHP 测试；最终检查由 GitHub Actions 执行。
+
+## Actions 分工
+
+- `Tests`：只监听 `main` 的 push 和 pull request，不再因版本标签产生重复运行。
+- `Release`：只接受手动调度，由 `crowveil` 触发；核验同一提交的 Tests 结果后打包，拥有发布所需的 `contents: write`，不会重复运行整套 PHP / Node 测试。
+
+网络中断后可重新运行相同命令。若 `main` 已包含本次提交，脚本会验证它的父提交是否为 `RELEASE_BASE`，然后继续等待测试和触发发布，不会强制覆盖 `main`。
+
+发布脚本将完整的待发布提交 SHA 传给工作流。若 main 在测试后变化，或工作流实际检出的提交不同，立即停止。失败日志在终端打印的 Actions 链接查看；若仅测试环境发生临时故障，可在 GitHub 重跑失败的 Tests，再重新执行发布命令。
+
+`publish.sh`、`tools/publish.py` 和 workflow 是公开源码的一部分，不含 Token 或密码。Debian 使用已登录的 gh 凭据；Actions 使用 GitHub 给本仓库工作流的临时 `GITHUB_TOKEN`，不是个人 PAT。提交和标签元数据仍使用 crowveil 的公开身份，Release 的创建者可能显示为 `github-actions[bot]`。
+
+首次推送工作流需要你的 gh 凭据具有更新 workflow 的权限。若 GitHub 返回 workflow 权限不足，按错误提示为当前 crowveil 登录补充权限（经典 OAuth 登录可使用 `gh auth refresh -h github.com -s workflow`）；脚本不会自行增加权限或切换账号。

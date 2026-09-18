@@ -29,8 +29,12 @@
 - [架构](docs/architecture.md)：鉴权、转换、合并和控制台生命周期。
 - [开发与测试](docs/development.md)：安装依赖、回归验证与打包。
 - [迁移](docs/migration.md)：早期内部版本保留配置的迁移与回退。
-- [Debian 发布流程](docs/publishing.md)：在源码根目录运行 `bash publish.sh`，检查身份后推送代码及 Release。
+- [Debian 发布流程](docs/publishing.md)：本机只需 `git`、`gh`、`python3`；GitHub Actions 负责测试、打包和 Release。
 - [更新记录](ExternalNodeBridge/CHANGELOG.md)。
+
+## 维护者发布
+
+维护者修正现有 0.1.1：在完整源码根目录执行 `bash publish.sh --check`，然后执行 `bash publish.sh --repair-0.1.1`。普通用户下载 Release 中的插件安装 ZIP 即可，不需要运行发布脚本。
 
 ## 兼容范围
 

@@ -21,7 +21,7 @@ final class LiveConverterTest extends BridgeTestCase
         $this->assertTrue($version['ok'], json_encode($version));
         $source = $this->settings['sources'][0];
         $proof = [];
-        foreach (['mihomo' => ['clash','meta'],'stash' => ['stash'],'surge' => ['surge'],'surfboard' => ['surfboard'],'loon' => ['loon'],'quanx' => ['quantumult-x'],'mixed' => ['general','v2rayn','v2rayng'],'sssub' => ['shadowsocks'],'shadowrocket' => ['shadowrocket'],'singbox' => ['sing-box/1.12.0']] as $target => $flags) {
+        foreach (['mihomo' => ['clash', 'meta'], 'stash' => ['stash'], 'surge' => ['surge'], 'surfboard' => ['surfboard'], 'loon' => ['loon'], 'quanx' => ['quantumult-x'], 'mixed' => ['general', 'v2rayn', 'v2rayng'], 'sssub' => ['shadowsocks'], 'shadowrocket' => ['shadowrocket'], 'singbox' => ['sing-box/1.12.0']] as $target => $flags) {
             $result = Refresher::create($this->settings)->refresh($source, $target, true);
             $this->assertNull($result['error'], $target.' '.json_encode($result));
             $this->assertGreaterThan(0, $result['count']);
@@ -29,7 +29,7 @@ final class LiveConverterTest extends BridgeTestCase
                 $response = $this->subscribe('user-a-token', $flag);
                 $this->assertSame(200, $response->getStatusCode(), $flag);
                 $body = $response->getContent();
-                if (in_array($target, ['quanx','mixed','shadowrocket'])) {
+                if (in_array($target, ['quanx', 'mixed', 'shadowrocket'])) {
                     $body = base64_decode($body, true);
                 }
                 $this->assertStringContainsString('ss.example.test', $body, $flag.' external SS');
@@ -37,13 +37,13 @@ final class LiveConverterTest extends BridgeTestCase
                     $this->assertStringContainsString('user-a-private', $body, $flag.' own node');
                 }
                 $unauthorized = $this->subscribe('user-b-token', $flag)->getContent();
-                if (in_array($target, ['quanx','mixed','shadowrocket'])) {
+                if (in_array($target, ['quanx', 'mixed', 'shadowrocket'])) {
                     $unauthorized = base64_decode($unauthorized, true);
                 }
                 $this->assertStringNotContainsString('EXTERNAL-TROJAN-PASSWORD', $unauthorized);
                 $this->assertStringNotContainsString('ss.example.test', $unauthorized);
             }
-            $proof[$target] = ['flags' => $flags,'external_nodes' => $result['count']];
+            $proof[$target] = ['flags' => $flags, 'external_nodes' => $result['count']];
         }
         file_put_contents(__DIR__.'/runtime/live/all-formats.json', json_encode($proof, JSON_PRETTY_PRINT));
     }
@@ -98,13 +98,13 @@ final class LiveConverterTest extends BridgeTestCase
         $source = $this->settings['sources'][0];
         $ref = Refresher::create($this->settings);
         $proof = [];
-        foreach (['mihomo' => 'meta','shadowrocket' => 'shadowrocket','singbox' => 'sing-box/1.12.0'] as $target => $flag) {
+        foreach (['mihomo' => 'meta', 'shadowrocket' => 'shadowrocket', 'singbox' => 'sing-box/1.12.0'] as $target => $flag) {
             $result = $ref->refresh($source, $target, true);
             $this->assertNull($result['error'], $target.' conversion error');
             $this->assertTrue($result['usable'], $target.' usable');
             $this->assertGreaterThanOrEqual(3, $result['count']);
             $entry = (new NodeCache($this->settings, new Diagnostics($this->settings)))->read($source, $target);
-            $proof[$target] = ['count' => $result['count'],'protocols' => array_map(fn ($n) => is_array($n) ? $n['type'] : explode('://', $n, 2)[0], $entry['nodes'])];
+            $proof[$target] = ['count' => $result['count'], 'protocols' => array_map(fn ($n) => is_array($n) ? $n['type'] : explode('://', $n, 2)[0], $entry['nodes'])];
             $this->assertSame($target === 'shadowrocket' ? 4 : 5, $result['count']);
             if ($target === 'shadowrocket') {
                 $this->assertNotContains('tuic', $proof[$target]['protocols']);
@@ -128,11 +128,11 @@ final class LiveConverterTest extends BridgeTestCase
             }
         }
         $export = json_encode(Plugin\ExternalNodeBridge\Services\Report::make($this->settings));
-        $this->assertStringNotContainsString('EXTERNAL-TROJAN-PASSWORD',$export);
-        $this->assertStringNotContainsString($sourceUrl,$export);
+        $this->assertStringNotContainsString('EXTERNAL-TROJAN-PASSWORD', $export);
+        $this->assertStringNotContainsString($sourceUrl, $export);
         if (!is_dir(__DIR__.'/runtime/live')) {
-            mkdir(__DIR__.'/runtime/live',0700,true);
+            mkdir(__DIR__.'/runtime/live', 0700, true);
         }
-        file_put_contents(__DIR__.'/runtime/live/proof.json',json_encode($proof,JSON_PRETTY_PRINT));
+        file_put_contents(__DIR__.'/runtime/live/proof.json', json_encode($proof, JSON_PRETTY_PRINT));
     }
 }

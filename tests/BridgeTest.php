@@ -24,7 +24,7 @@ final class BridgeTest extends BridgeTestCase
     {
         $this->cache('a', 'mihomo', [self::node('A')]);
         $this->cache('b', 'mihomo', [self::node('B')]);
-        foreach ([['user-a-token','[a] A','[b] B'],['user-b-token','[b] B','[a] A'],['user-a-token','[a] A','[b] B']] as [$token,$yes,$no]) {
+        foreach ([['user-a-token', '[a] A', '[b] B'], ['user-b-token', '[b] B', '[a] A'], ['user-a-token', '[a] A', '[b] B']] as [$token, $yes, $no]) {
             $r = $this->subscribe($token, 'meta', ['group_id' => 2]);
             $this->assertStringContainsString($yes, $r->getContent());
             $this->assertStringNotContainsString($no, $r->getContent());
@@ -65,7 +65,7 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testSingboxNativeResponseCanBeMerged(): void
     {
-        $this->cache('a', 'singbox', [['type' => 'trojan','tag' => 'Outside','server' => 'external.example','server_port' => 443,'password' => 'EXTERNAL_PASSWORD','tls' => ['enabled' => true]]]);
+        $this->cache('a', 'singbox', [['type' => 'trojan', 'tag' => 'Outside', 'server' => 'external.example', 'server_port' => 443, 'password' => 'EXTERNAL_PASSWORD', 'tls' => ['enabled' => true]]]);
         $body = json_decode($this->subscribe('user-a-token', 'sing-box/1.12.0')->getContent(), true);
         $byTag = array_column($body['outbounds'], null, 'tag');
         $this->assertSame('EXTERNAL_PASSWORD', $byTag['[a] Outside']['password']);
@@ -93,9 +93,9 @@ final class BridgeTest extends BridgeTestCase
     public function testDiagnosticsDiscardSecretsAndDebugExpiry(): void
     {
         $log = new Diagnostics($this->settings);
-        $log->record('CHECK', ['url' => 'https://secret.example/?token=LEAK','password' => 'LEAK','body' => 'LEAK','error' => 'https://secret.example','count' => 3,'source_id' => 'a']);
+        $log->record('CHECK', ['url' => 'https://secret.example/?token=LEAK', 'password' => 'LEAK', 'body' => 'LEAK', 'error' => 'https://secret.example', 'count' => 3, 'source_id' => 'a']);
         $report = json_encode(Report::make($this->settings));
-        foreach (['LEAK','UPSTREAM_SECRET','EXTERNAL_PASSWORD','user-a-token','secret.example'] as $secret) {
+        foreach (['LEAK', 'UPSTREAM_SECRET', 'EXTERNAL_PASSWORD', 'user-a-token', 'secret.example'] as $secret) {
             $this->assertStringNotContainsString($secret, $report);
         }
         $this->assertStringContainsString('CHECK', $report);
@@ -116,10 +116,10 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testProviderRemovalPreservesRuleProvidersAndRebuildsEmptyGroups(): void
     {
-        $base = ['proxies' => [],'proxy-providers' => ['old' => ['url' => 'secret'],'keep' => ['url' => 'other']],'rule-providers' => ['rules' => ['url' => 'rules']],'proxy-groups' => [['name' => '🚀 节点选择','type' => 'select','proxies' => ['DIRECT'],'use' => ['old','keep']]],'rules' => ['MATCH,🚀 节点选择']];
+        $base = ['proxies' => [], 'proxy-providers' => ['old' => ['url' => 'secret'], 'keep' => ['url' => 'other']], 'rule-providers' => ['rules' => ['url' => 'rules']], 'proxy-groups' => [['name' => '🚀 节点选择', 'type' => 'select', 'proxies' => ['DIRECT'], 'use' => ['old', 'keep']]], 'rules' => ['MATCH,🚀 节点选择']];
         $c = $this->settings;
         $c['remove_provider_keys'] = ['old'];
-        $r = Merger::merge(Yaml::dump($base, 8), 'mihomo', [['source_id' => 'a','nodes' => [self::node()]]], $c);
+        $r = Merger::merge(Yaml::dump($base, 8), 'mihomo', [['source_id' => 'a', 'nodes' => [self::node()]]], $c);
         $out = Yaml::parse($r['body']);
         $this->assertArrayNotHasKey('old', $out['proxy-providers']);
         $this->assertSame($base['rule-providers'], $out['rule-providers']);
@@ -130,9 +130,9 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testDependenciesAreRemappedAndBrokenChainsRemoved(): void
     {
-        $nodes = [self::node('Exit'),self::node('Relay') + ['dialer-proxy' => 'Exit'],self::node('Broken') + ['dialer-proxy' => 'Missing'],self::node('Cycle') + ['dialer-proxy' => 'Cycle']];
+        $nodes = [self::node('Exit'), self::node('Relay') + ['dialer-proxy' => 'Exit'], self::node('Broken') + ['dialer-proxy' => 'Missing'], self::node('Cycle') + ['dialer-proxy' => 'Cycle']];
         $base = "proxies: []\nproxy-groups: []\nrules: []\n";
-        $out = Merger::merge($base, 'mihomo', [['source_id' => 'a','nodes' => $nodes]], $this->settings);
+        $out = Merger::merge($base, 'mihomo', [['source_id' => 'a', 'nodes' => $nodes]], $this->settings);
         $byName = array_column(Yaml::parse($out['body'])['proxies'], null, 'name');
         $this->assertSame('[a] Exit', $byName['[a] Relay']['dialer-proxy']);
         $this->assertCount(2, $byName);
@@ -140,8 +140,8 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testTypesAndNameFilterApplyToExternalNodes(): void
     {
-        $this->cache('a', 'mihomo', [self::node('HK'),self::node('US')]);
-        $body = $this->subscribe('user-a-token', 'meta', ['filter' => 'HK','types' => 'trojan'])->getContent();
+        $this->cache('a', 'mihomo', [self::node('HK'), self::node('US')]);
+        $body = $this->subscribe('user-a-token', 'meta', ['filter' => 'HK', 'types' => 'trojan'])->getContent();
         $this->assertStringContainsString('[a] HK', $body);
         $this->assertStringNotContainsString('[a] US', $body);
     }
@@ -167,12 +167,12 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testMalformedAndProviderOutputAreRejected(): void
     {
-        foreach (['<html>error</html>',"proxy-providers:\n  a: {type: http}\nproxies: []"] as $input) {
+        foreach (['<html>error</html>', "proxy-providers:\n  a: {type: http}\nproxies: []"] as $input) {
             try {
                 Merger::extract($input, 'mihomo');
                 $this->fail('Expected rejection');
             } catch (BridgeException $e) {
-                $this->assertContains($e->reason, ['OUTPUT_INVALID','PROVIDER_OUTPUT_REJECTED']);
+                $this->assertContains($e->reason, ['OUTPUT_INVALID', 'PROVIDER_OUTPUT_REJECTED']);
             }
         }
     }
@@ -185,11 +185,11 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testUpstreamUaIsValidatedAndSeparatesCache(): void
     {
-        $this->cache('a','mihomo',[self::node()]);
+        $this->cache('a', 'mihomo', [self::node()]);
         $c = $this->settings;
         $c['upstream_user_agent'] = 'Clash-Verge/test';
-        $cache = new NodeCache($c,new Diagnostics($c));
-        $this->assertSame([],$cache->read($c['sources'][0],'mihomo'));
+        $cache = new NodeCache($c, new Diagnostics($c));
+        $this->assertSame([], $cache->read($c['sources'][0], 'mihomo'));
         $c['upstream_user_agent'] = "clash.meta\r\nX-Injected: value";
         $this->expectException(BridgeException::class);
         Settings::normalize($c);

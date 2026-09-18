@@ -1,0 +1,47 @@
+name: Release
+run-name: Release ${{ inputs.version }} at ${{ inputs.expected_commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without v (for example 0.1.1)
+        required: true
+        type: string
+      confirmation:
+        description: PUBLISH vX.Y.Z or REPUBLISH v0.1.1
+        required: true
+        type: string
+      expected_commit:
+        description: Full SHA of the tested main commit
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: subscription-bridge-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.repository == 'crowveil/xboard-subscription-bridge' &&
+      github.actor == 'crowveil' && github.triggering_actor == 'crowveil' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tested commit, build and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+          INPUT_COMMIT: ${{ inputs.expected_commit }}
+        run: python3 tools/release.py

@@ -129,6 +129,13 @@ def main():
     destination = ROOT / "dist" / version
     destination.mkdir(parents=True, exist_ok=True)
     paths = source_files()
+    required = {"publish.sh", "tools/publish.py", "tools/release.py", "RELEASE_BASE",
+                ".github/workflows/test.yml", ".github/workflows/release.yml",
+                f"docs/releases/v{version}.md"}
+    actual = {path.relative_to(ROOT).as_posix() for path in paths}
+    missing = required - actual
+    if missing:
+        raise ValueError(f"Source archive is missing release inputs: {sorted(missing)}")
     plugin_paths = [path for path in paths if path.is_relative_to(PLUGIN)]
     install = destination / f"ExternalNodeBridge-{version}.zip"
     source = destination / f"xboard-subscription-bridge-{version}-source.zip"

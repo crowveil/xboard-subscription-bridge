@@ -1,7 +1,6 @@
-"""Publish a reviewed source snapshot through the explicitly authenticated gh account."""
+"""Push a reviewed source snapshot and delegate verification/release to Actions."""
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from build import ROOT, source_files
 
@@ -17,16 +17,18 @@ REPO = "crowveil/xboard-subscription-bridge"
 URL = f"https://github.com/{REPO}.git"
 NAME = "crowveil"
 EMAIL = "330225440+crowveil@users.noreply.github.com"
+BRANCH = "main"
+REPAIR_VERSION = "0.1.1"
 
 
 class PublishError(RuntimeError):
     pass
 
 
-def run(args, cwd=ROOT, check=True):
+def run(args, cwd=None, check=True):
     result = subprocess.run(
         args,
-        cwd=cwd,
+        cwd=cwd or ROOT,
         text=True,
         capture_output=True,
         env={**os.environ, "GH_HOST": "github.com", "GH_PROMPT_DISABLED": "1"},
@@ -46,7 +48,6 @@ def gh(*args, check=True):
 
 
 def git(repo, *args, check=True):
-    # Empty helper first: do not reuse another account's cached Git credentials.
     return run(
         [
             "git",
@@ -99,63 +100,6 @@ def api_optional(path):
     raise PublishError(f"无法确认 GitHub 状态：{result.stderr.strip()}")
 
 
-def check_tag(repo, tag, commit):
-    ref = api_optional(f"repos/{REPO}/git/ref/tags/{tag}")
-    if ref is None:
-        return False
-    obj = ref["object"]
-    # Resolve annotated tags, including nested annotations, without changing refs.
-    for _ in range(8):
-        if obj["type"] == "commit":
-            if obj["sha"] != commit:
-                raise PublishError("同名远端标签指向不同提交；不会覆盖已发布版本。")
-            return True
-        if obj["type"] != "tag":
-            break
-        data = gh(
-            "api", "--hostname", "github.com", f"repos/{REPO}/git/tags/{obj['sha']}"
-        )
-        obj = json.loads(data.stdout)["object"]
-    raise PublishError("远端标签无法解析为预期提交。")
-
-
-def sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def release_assets(tag, assets, published):
-    listing = json.loads(
-        gh("release", "view", tag, "--repo", REPO, "--json", "assets").stdout
-    )["assets"]
-    expected = {path.name: path for path in assets}
-    actual = {item["name"]: item for item in listing}
-    if set(actual) - set(expected):
-        raise PublishError("Release 包含未预期的附件，已停止，请手动核对。")
-    with tempfile.TemporaryDirectory(prefix="bridge-assets-") as directory:
-        for name, path in expected.items():
-            if name in actual:
-                gh(
-                    "release",
-                    "download",
-                    tag,
-                    "--repo",
-                    REPO,
-                    "--pattern",
-                    name,
-                    "--dir",
-                    directory,
-                )
-                if sha256(Path(directory) / name) != sha256(path):
-                    raise PublishError(f"已有附件 {name} 与本地构建不同；不会覆盖。")
-            elif published:
-                raise PublishError(
-                    "已公开的 Release 缺少附件；不会自动修改已发布版本。"
-                )
-            else:
-                account()
-                gh("release", "upload", tag, str(path), "--repo", REPO)
-
-
 def prepare_snapshot(destination):
     paths = source_files()
     wanted = {path.relative_to(ROOT).as_posix() for path in paths}
@@ -166,7 +110,6 @@ def prepare_snapshot(destination):
     for path in paths:
         target = destination / path.relative_to(ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
-        # Source ZIPs have normalized modes; keep snapshot modes deterministic.
         shutil.copyfile(path, target)
         target.chmod(0o644)
     identity(destination)
@@ -174,10 +117,112 @@ def prepare_snapshot(destination):
     git(destination, "diff", "--cached", "--check")
 
 
-def publish(check_only=False):
+def workflow_runs(workflow, commit, event):
+    result = gh(
+        "run",
+        "list",
+        "--repo",
+        REPO,
+        "--workflow",
+        workflow,
+        "--event",
+        event,
+        "--commit",
+        commit,
+        "--limit",
+        "30",
+        "--json",
+        "databaseId,headBranch,headSha,status,conclusion",
+    )
+    return json.loads(result.stdout)
+
+
+def wait_for_tests(commit, attempts=60, delay=5):
+    for _ in range(attempts):
+        candidates = [
+            item
+            for item in workflow_runs("test.yml", commit, "push")
+            if item["headBranch"] == BRANCH and item["headSha"] == commit
+        ]
+        if candidates:
+            run_id = str(candidates[0]["databaseId"])
+            print(f"等待 main 测试：run {run_id}", flush=True)
+            watch(run_id)
+            return run_id
+        time.sleep(delay)
+    raise PublishError("等待 main 测试工作流创建超时。")
+
+
+def watch(run_id):
+    print(f"https://github.com/{REPO}/actions/runs/{run_id}", flush=True)
+    code = subprocess.call(
+        ["gh", "run", "watch", str(run_id), "--repo", REPO, "--exit-status"],
+        env={**os.environ, "GH_HOST": "github.com", "GH_PROMPT_DISABLED": "1"},
+    )
+    if code:
+        raise PublishError(f"Actions run {run_id} 未成功；请查看上方链接，不会继续发布。")
+
+
+def dispatch_release(version, commit, replace_existing, attempts=60, delay=5):
+    current = api_optional(f"repos/{REPO}/git/ref/heads/main")
+    if current is None or current["object"]["sha"] != commit:
+        raise PublishError("main 在测试期间已变化；不会发布其他提交。")
+    before = {
+        item["databaseId"]
+        for item in workflow_runs("release.yml", commit, "workflow_dispatch")
+    }
+    tag = f"v{version}"
+    confirmation = f"REPUBLISH {tag}" if replace_existing else f"PUBLISH {tag}"
+    account()
+    gh(
+        "workflow",
+        "run",
+        "release.yml",
+        "--repo",
+        REPO,
+        "--ref",
+        BRANCH,
+        "-f",
+        f"version={version}",
+        "-f",
+        f"confirmation={confirmation}",
+        "-f",
+        f"expected_commit={commit}",
+    )
+    for _ in range(attempts):
+        candidates = [
+            item
+            for item in workflow_runs("release.yml", commit, "workflow_dispatch")
+            if item["databaseId"] not in before and item["headSha"] == commit
+        ]
+        if candidates:
+            run_id = str(candidates[0]["databaseId"])
+            print(f"等待 GitHub 发布：run {run_id}", flush=True)
+            watch(run_id)
+            return run_id
+        time.sleep(delay)
+    raise PublishError("等待 Release 工作流创建超时。")
+
+
+def validate_release_state(version, replace_existing, check_only=False):
+    tag = f"v{version}"
+    tag_ref = api_optional(f"repos/{REPO}/git/ref/tags/{tag}")
+    release = api_optional(f"repos/{REPO}/releases/tags/{tag}")
+    if replace_existing:
+        if version != REPAIR_VERSION:
+            raise PublishError("只允许对 v0.1.1 执行一次性修正；其他版本必须递增版本号。")
+        if tag_ref is None or release is None:
+            raise PublishError("v0.1.1 的标签或 Release 不存在，不能执行修正发布。")
+    elif not check_only and release is not None and not release.get("draft", False):
+        raise PublishError("版本已经发布；请递增版本号，不会覆盖旧版本。")
+
+
+def publish(check_only=False, replace_existing=False):
+    print("publish.sh：GitHub Actions 发布模式；本机无需 PHP、Composer、Node 或 npm。", flush=True)
     for command in ("git", "gh"):
         if shutil.which(command) is None:
             raise PublishError(f"缺少 {command}，请先安装。")
+
     manifest = json.loads((ROOT / "ExternalNodeBridge/config.json").read_text())
     version = manifest["version"]
     if (
@@ -187,35 +232,32 @@ def publish(check_only=False):
         raise PublishError("版本或插件标识不正确。")
     base = (ROOT / "RELEASE_BASE").read_text().strip()
     if not re.fullmatch(r"[0-9a-f]{40}", base):
-        raise PublishError("RELEASE_BASE 必须是上一个版本的完整提交 SHA。")
-    tag = f"v{version}"
-    notes = ROOT / f"docs/releases/{tag}.md"
+        raise PublishError("RELEASE_BASE 必须是本版本所基于的远端 main 完整提交 SHA。")
+    notes = ROOT / f"docs/releases/v{version}.md"
     if not notes.is_file():
-        raise PublishError(f"缺少发布说明 docs/releases/{tag}.md。")
+        raise PublishError(f"缺少发布说明 {notes.relative_to(ROOT)}。")
+
     account()
     metadata = json.loads(
         gh("repo", "view", REPO, "--json", "nameWithOwner,defaultBranchRef").stdout
     )
     if (
         metadata["nameWithOwner"] != REPO
-        or metadata["defaultBranchRef"]["name"] != "main"
+        or metadata["defaultBranchRef"]["name"] != BRANCH
     ):
         raise PublishError("远端仓库或默认分支不是预期的 crowveil 仓库 / main。")
-    # Detect global insteadOf rewrites before the first Git network request.
     if git(ROOT, "ls-remote", "--get-url", URL).stdout.strip() != URL:
         raise PublishError("Git URL 被全局规则重写，已停止；脚本不会修改全局设置。")
-    print(f"已确认 GitHub 账号 crowveil，目标 {REPO}，版本 {tag}。", flush=True)
+    validate_release_state(version, replace_existing, check_only)
     print(run([sys.executable, "tools/build.py", "--check"]).stdout, end="")
 
-    # Work in a fresh clone: downloaded source archives need no .git directory,
-    # and the user's existing checkout / remotes / credentials are untouched.
     with tempfile.TemporaryDirectory(prefix="bridge-publish-") as directory:
         checkout = Path(directory) / "repo"
         git(
             Path(directory),
             "clone",
             "--branch",
-            "main",
+            BRANCH,
             "--single-branch",
             "--no-tags",
             URL,
@@ -230,7 +272,6 @@ def publish(check_only=False):
             git(checkout, "config", "--local", key, value)
         identity(checkout)
         remote(checkout)
-        # Never import unpublished local histories or silently rewrite remote history.
         print(
             run(
                 [
@@ -243,126 +284,86 @@ def publish(check_only=False):
             ).stdout,
             end="",
         )
-        head = git(checkout, "rev-parse", "HEAD").stdout.strip()
+
+        remote_head = git(checkout, "rev-parse", "HEAD").stdout.strip()
         prepare_snapshot(checkout)
-        changed = bool(git(checkout, "diff", "--cached", "--name-only").stdout.strip())
-        if changed and head != base:
+        changed = bool(
+            git(checkout, "diff", "--cached", "--name-only").stdout.strip()
+        )
+        if changed and remote_head != base:
             raise PublishError(
-                "远端 main 已变化，与 RELEASE_BASE 不一致；请先整合更新，不会覆盖远端。"
+                "远端 main 已变化，与 RELEASE_BASE 不一致；请先整合更新。"
             )
-        if not changed and head != base:
-            parents = git(checkout, "show", "-s", "--format=%P", "HEAD").stdout.strip()
-            if parents != base:
-                raise PublishError("远端历史不符合本版本的续传条件，请手动检查。")
-        if changed and api_optional(f"repos/{REPO}/git/ref/tags/{tag}") is not None:
-            raise PublishError("版本标签已存在，但源码仍有变化；请使用新的版本号。")
+        if not changed and remote_head != base:
+            parent = git(checkout, "show", "-s", "--format=%P", "HEAD").stdout.strip()
+            if parent != base:
+                raise PublishError("远端历史不符合本次发布的中断恢复条件。")
+
+        existing_tag = api_optional(f"repos/{REPO}/git/ref/tags/v{version}")
+        if existing_tag is not None and not replace_existing and not check_only:
+            from release import resolve_tag
+            if changed or resolve_tag(existing_tag) != remote_head:
+                raise PublishError("已有标签不对应当前源码，不能继续；请递增版本号。")
+
         print(git(checkout, "log", "-1", "--format=fuller").stdout)
         print("请检查下面的实际暂存差异，确认不包含真实凭据或私人信息：")
         print(
-            git(checkout, "diff", "--cached", "--no-ext-diff", "--no-textconv").stdout,
+            git(
+                checkout,
+                "diff",
+                "--cached",
+                "--no-ext-diff",
+                "--no-textconv",
+            ).stdout,
             flush=True,
         )
-        print(
-            run(
-                [sys.executable, "tools/build.py", "--check", "--package"], cwd=checkout
-            ).stdout,
-            end="",
-        )
         if check_only:
-            if not changed:
-                check_tag(checkout, tag, head)
-            print("检查完成。尚未提交、推送、创建标签或 Release。")
+            print("检查完成；未推送代码，也未触发 GitHub Actions 发布。")
             return
-        if (
-            input(f"将发布 {REPO} {tag}；确认上述差异后输入 publish：").strip()
-            != "publish"
-        ):
-            raise PublishError("已取消发布。")
+
+        tag = f"v{version}"
+        expected = f"REPUBLISH {tag}" if replace_existing else f"PUBLISH {tag}"
+        if input(f"确认后请输入 {expected}：").strip() != expected:
+            raise PublishError("确认文字不匹配，已取消。")
+
         account()
         identity(checkout)
         if changed:
-            git(
-                checkout,
-                "commit",
-                "-m",
-                f"Release {tag}: native console link and publishing workflow",
+            subject = (
+                f"Repair {tag}: move release verification to GitHub Actions"
+                if replace_existing
+                else f"Prepare {tag} release"
             )
-        head = git(checkout, "rev-parse", "HEAD").stdout.strip()
-        identity(checkout)
-        print(git(checkout, "log", "-1", "--format=fuller").stdout)
-        tag_exists = check_tag(checkout, tag, head)
-        if not tag_exists:
-            git(
-                checkout,
-                "tag",
-                "-a",
-                tag,
-                "-m",
-                f"XBoard Subscription Bridge {version}",
-            )
-            tagger = git(
-                checkout,
-                "for-each-ref",
-                "--format=%(taggername) %(taggeremail)",
-                f"refs/tags/{tag}",
-            ).stdout.strip()
-            if tagger != f"{NAME} <{EMAIL}>":
-                raise PublishError("标签作者不符合 crowveil 身份。")
-            account()
+            git(checkout, "commit", "--no-gpg-sign", "-m", subject)
             identity(checkout)
+            print(git(checkout, "log", "-1", "--format=fuller").stdout)
+            account()
             remote(checkout)
-            git(
-                checkout,
-                "push",
-                "--atomic",
-                "origin",
-                "HEAD:refs/heads/main",
-                f"refs/tags/{tag}:refs/tags/{tag}",
-            )
-        release = api_optional(f"repos/{REPO}/releases/tags/{tag}")
-        dist = checkout / "dist" / version
-        assets = [
-            dist / f"ExternalNodeBridge-{version}.zip",
-            dist / f"xboard-subscription-bridge-{version}-source.zip",
-            dist / "SHA256SUMS",
-        ]
-        if release is None:
-            account()
-            identity(checkout)
-            gh(
-                "release",
-                "create",
-                tag,
-                "--repo",
-                REPO,
-                "--verify-tag",
-                "--draft",
-                "--title",
-                f"XBoard Subscription Bridge {version}",
-                "--notes-file",
-                str(notes),
-            )
-            release = {"draft": True}
-        release_assets(tag, assets, published=not release["draft"])
-        # Re-download all assets after uploading; publish only a complete, matching set.
-        if release["draft"]:
-            release_assets(tag, assets, published=True)
-            account()
-            identity(checkout)
-            gh("release", "edit", tag, "--repo", REPO, "--draft=false", "--latest")
+            git(checkout, "push", "origin", f"HEAD:refs/heads/{BRANCH}")
+
+        commit = git(checkout, "rev-parse", "HEAD").stdout.strip()
+        identity(checkout)
+        wait_for_tests(commit)
+        dispatch_release(version, commit, replace_existing)
         print(f"发布完成：https://github.com/{REPO}/releases/tag/{tag}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="检查身份、审阅差异并推送 main、版本标签和 Release。"
+        description="审阅并推送源码，由 GitHub Actions 测试、打包和发布。"
     )
     parser.add_argument(
-        "--check", action="store_true", help="只检查和构建，不提交、不推送、不发布"
+        "--check", action="store_true", help="只检查身份和差异，不进行远端写操作"
+    )
+    parser.add_argument(
+        "--repair-0.1.1",
+        dest="replace_existing",
+        action="store_true",
+        help="仅用于修正已经发布的 v0.1.1",
     )
     args = parser.parse_args()
     try:
-        publish(args.check)
+        publish(args.check, args.replace_existing)
     except (
         PublishError,
         OSError,

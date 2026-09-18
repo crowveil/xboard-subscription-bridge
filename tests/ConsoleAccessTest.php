@@ -20,7 +20,7 @@ final class ConsoleAccessTest extends BridgeTestCase
     private function enable(): void
     {
         app('auth')->admin = (object)['is_admin' => true];
-        app(App\Services\Plugin\PluginConfigService::class)->updateConfig(Settings::CODE, ['converter_url' => $this->settings['converter_url'],'console_open' => true]);
+        app(App\Services\Plugin\PluginConfigService::class)->updateConfig(Settings::CODE, ['converter_url' => $this->settings['converter_url'], 'console_open' => true]);
     }
 
     public function testClosedConsoleRejectsAllOperationsAndDoesNotAffectSubscriptions(): void
@@ -29,8 +29,8 @@ final class ConsoleAccessTest extends BridgeTestCase
         $this->assertSame(200, $this->call('GET', 'settings')->getStatusCode());
         $this->cache('a', 'mihomo', [self::node()]);
         $this->assertSame(200, $this->call('POST', 'close')->getStatusCode());
-        foreach ([['GET','settings'],['POST','settings'],['POST','debug'],['GET','status'],['GET','export'],['POST','health'],['POST','refresh'],['POST','renew']] as [$m,$p]) {
-            $r = $this->call($m, $p, ['config' => $this->settings,'enabled' => true,'source_id' => 'a','target' => 'mihomo']);
+        foreach ([['GET', 'settings'], ['POST', 'settings'], ['POST', 'debug'], ['GET', 'status'], ['GET', 'export'], ['POST', 'health'], ['POST', 'refresh'], ['POST', 'renew']] as [$m, $p]) {
+            $r = $this->call($m, $p, ['config' => $this->settings, 'enabled' => true, 'source_id' => 'a', 'target' => 'mihomo']);
             $this->assertSame(403, $r->getStatusCode(), $p);
             $this->assertStringNotContainsString('UPSTREAM_SECRET', $r->getContent());
         }
@@ -62,7 +62,7 @@ final class ConsoleAccessTest extends BridgeTestCase
         $this->assertSame('[a]', $c['sources'][0]['prefix']);
         $this->assertSame('a', $c['sources'][0]['id']);
         $this->assertSame('sce-v1.9.6', $c['cache_revision']);
-        app(App\Services\Plugin\PluginConfigService::class)->updateConfig(Settings::CODE, ['converter_url' => $c['converter_url'],'console_open' => true]);
+        app(App\Services\Plugin\PluginConfigService::class)->updateConfig(Settings::CODE, ['converter_url' => $c['converter_url'], 'console_open' => true]);
         $this->assertSame($c, Settings::load());
     }
     public function testNewSourceIdsAreGeneratedStableAndUrlsArePlainOnlyForAdmins(): void
@@ -91,7 +91,7 @@ final class ConsoleAccessTest extends BridgeTestCase
         $c['debug'] = false;
         $source = $c['sources'][0];
         $this->cache('a', 'mihomo', [self::node()]);
-        Http::fake(['*/version' => Http::sequence()->push('SubConverter-Extended v1.9.6 backend', 200)->push('private failure body', 503)->push('SubConverter-Extended v1.9.7 backend', 200),'*/sub*' => Http::response(Symfony\Component\Yaml\Yaml::dump(['proxies' => [self::node('New')]], 6), 200)]);
+        Http::fake(['*/version' => Http::sequence()->push('SubConverter-Extended v1.9.6 backend', 200)->push('private failure body', 503)->push('SubConverter-Extended v1.9.7 backend', 200), '*/sub*' => Http::response(Symfony\Component\Yaml\Yaml::dump(['proxies' => [self::node('New')]], 6), 200)]);
         $converter = new Converter($c);
         $first = $converter->version(true);
         $this->assertTrue($first['ok']);
@@ -109,7 +109,7 @@ final class ConsoleAccessTest extends BridgeTestCase
         Refresher::create($c)->refresh($source, 'mihomo');
         $new = $cache->read($source, 'mihomo');
         $this->assertSame('v1.9.7', $new['converter_version']);
-        $this->assertSame('New',$new['nodes'][0]['name']);
-        Http::assertSent(fn ($r) => str_ends_with($r->url(),'/version') && $r->hasHeader('Sec-Fetch-Mode','cors') && $r->hasHeader('Sec-Fetch-Dest','empty'));
+        $this->assertSame('New', $new['nodes'][0]['name']);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/version') && $r->hasHeader('Sec-Fetch-Mode', 'cors') && $r->hasHeader('Sec-Fetch-Dest', 'empty'));
     }
 }
