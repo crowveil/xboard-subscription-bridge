@@ -83,11 +83,15 @@ def identity(repo):
 
 
 def remote(repo):
+    # actions/checkout uses the same HTTPS repository without a .git suffix.
+    # Keep exact allowlisting; do not rewrite origin or accept other hosts/users.
+    allowed = {URL, URL.removesuffix(".git")}
     for args in (
-        ("remote", "get-url", "origin"),
-        ("remote", "get-url", "--push", "origin"),
+        ("remote", "get-url", "--all", "origin"),
+        ("remote", "get-url", "--push", "--all", "origin"),
     ):
-        if git(repo, *args).stdout.strip() != URL:
+        urls = git(repo, *args).stdout.strip().splitlines()
+        if not urls or any(url not in allowed for url in urls):
             raise PublishError("origin 或 URL 重写规则不符合目标 HTTPS 仓库，已停止。")
 
 

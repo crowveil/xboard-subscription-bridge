@@ -3,6 +3,7 @@
 import json
 import contextlib
 import io
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,6 +20,56 @@ import release
 
 def result(args=(), stdout="", code=0, stderr=""):
     return subprocess.CompletedProcess(args, code, stdout, stderr)
+
+
+class RealRemoteTests(unittest.TestCase):
+    """Real Git configuration, including the URL set by actions/checkout."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="bridge-remote-test-")
+        self.addCleanup(directory.cleanup)
+        self.repo = Path(directory.name)
+        env = patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        publish.git(self.repo, "init", "--initial-branch=main")
+
+    def test_clone_and_checkout_urls_pass_without_rewriting_origin(self):
+        for url in (publish.URL, publish.URL.removesuffix(".git")):
+            with self.subTest(url=url):
+                publish.git(self.repo, "config", "--local", "remote.origin.url", url)
+                # Exercise the same imported function used by tools/release.py.
+                release.remote(self.repo)
+                self.assertEqual(publish.git(self.repo, "config", "--local", "--get", "remote.origin.url").stdout.strip(), url)
+
+    def test_wrong_fetch_or_push_target_is_rejected(self):
+        bad_urls = (
+            "https://github.com/another-owner/xboard-subscription-bridge.git",
+            "https://github.com/crowveil/another-repo.git",
+            "https://github.com.example.test/crowveil/xboard-subscription-bridge.git",
+            "http://github.com/crowveil/xboard-subscription-bridge.git",
+            "git@github.com:crowveil/xboard-subscription-bridge.git",
+            "https://credential@github.com/crowveil/xboard-subscription-bridge.git",
+        )
+        for key in ("remote.origin.url", "remote.origin.pushurl"):
+            for url in bad_urls:
+                with self.subTest(key=key, url=url):
+                    publish.git(self.repo, "config", "--local", "remote.origin.url", publish.URL)
+                    publish.git(self.repo, "config", "--local", "--unset-all", "remote.origin.pushurl", check=False)
+                    publish.git(self.repo, "config", "--local", key, url)
+                    with self.assertRaises(publish.PublishError):
+                        release.remote(self.repo)
+
+    def test_secondary_push_target_and_url_rewrite_are_rejected(self):
+        publish.git(self.repo, "config", "--local", "remote.origin.url", publish.URL)
+        publish.git(self.repo, "config", "--local", "--add", "remote.origin.pushurl", publish.URL)
+        publish.git(self.repo, "config", "--local", "--add", "remote.origin.pushurl", "https://example.test/unexpected.git")
+        with self.assertRaises(publish.PublishError):
+            release.remote(self.repo)
+        publish.git(self.repo, "config", "--local", "--unset-all", "remote.origin.pushurl")
+        publish.git(self.repo, "config", "--local", "url.https://example.test/.insteadOf", "https://github.com/")
+        with self.assertRaises(publish.PublishError):
+            release.remote(self.repo)
 
 
 class PublishTests(unittest.TestCase):
@@ -186,6 +237,110 @@ class PublishTests(unittest.TestCase):
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_release_with_real_checkout_remote_build_tag_and_upload_resume(self):
+        """Use real Git/build, substituting only GitHub API and network transport."""
+        original_git = publish.git
+        inputs = build.source_files()
+        original_root = build.ROOT
+        with tempfile.TemporaryDirectory(prefix="bridge-release-run-") as directory, patch.dict(
+            os.environ, {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+        ):
+            root = Path(directory)
+            checkout, bare = root / "checkout", root / "remote.git"
+            for file in inputs:
+                target = checkout / file.relative_to(original_root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(file, target)
+            original_git(checkout, "init", "--initial-branch=main")
+            for key, value in (("user.name", publish.NAME), ("user.email", publish.EMAIL),
+                               ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
+                original_git(checkout, "config", "--local", key, value)
+            publish.identity(checkout)
+            original_git(checkout, "add", "--all")
+            original_git(checkout, "commit", "-m", "Synthetic original release")
+            old_commit = original_git(checkout, "rev-parse", "HEAD").stdout.strip()
+            original_git(checkout, "tag", "-a", "v0.1.1", "-m", "Synthetic original tag")
+            original_git(root, "clone", "--bare", str(checkout), str(bare))
+            original_git(checkout, "remote", "add", "origin", publish.URL.removesuffix(".git"))
+            with (checkout / "README.md").open("a") as file:
+                file.write("\nSynthetic repaired source\n")
+            original_git(checkout, "add", "README.md")
+            original_git(checkout, "commit", "-m", "Synthetic repair")
+            commit = original_git(checkout, "rev-parse", "HEAD").stdout.strip()
+            env = dict(INPUT_VERSION="0.1.1", INPUT_COMMIT=commit,
+                       INPUT_CONFIRMATION="REPUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
+                       GITHUB_ACTOR="crowveil", GITHUB_TRIGGERING_ACTOR="crowveil",
+                       GITHUB_REF="refs/heads/main", GITHUB_SHA=commit,
+                       GITHUB_EVENT_NAME="workflow_dispatch")
+            names = ("ExternalNodeBridge-0.1.1.zip", "xboard-subscription-bridge-0.1.1-source.zip", "SHA256SUMS")
+            uploaded = {name: b"synthetic old asset" for name in names}
+            writes, pushes, edits = [], [], []
+            interrupted = [False]
+
+            def transport_git(cwd, *args, **kwargs):
+                if args[0] == "push":
+                    self.assertTrue(args[1].startswith("--force-with-lease=refs/tags/v0.1.1:"))
+                    self.assertEqual(args[-1], "refs/tags/v0.1.1:refs/tags/v0.1.1")
+                    pushes.append(args)
+                    # No synthetic remote-get-url result: only network push is redirected.
+                    args = tuple(str(bare) if arg == "origin" else arg for arg in args)
+                return original_git(cwd, *args, **kwargs)
+
+            def fake_gh(*args, **kwargs):
+                if args[0] == "api":
+                    endpoint = next(a for a in args if a.startswith("repos/"))
+                    if "/actions/workflows/" in endpoint:
+                        return result(stdout=json.dumps({"workflow_runs": [dict(id=1, head_sha=commit, head_branch="main", event="push", conclusion="success")]}))
+                    if "/git/ref/tags/" in endpoint:
+                        sha = original_git(bare, "rev-parse", "refs/tags/v0.1.1").stdout.strip()
+                        return result(stdout=json.dumps({"object": {"type": "tag", "sha": sha}}))
+                    if "/git/tags/" in endpoint:
+                        sha = original_git(bare, "rev-parse", endpoint.rsplit("/", 1)[1] + "^{commit}").stdout.strip()
+                        return result(stdout=json.dumps({"object": {"type": "commit", "sha": sha}}))
+                    if "/releases/tags/" in endpoint:
+                        return result(stdout=json.dumps({"draft": False, "immutable": False}))
+                elif args[:2] == ("release", "view"):
+                    return result(stdout=json.dumps({"assets": [{"name": n} for n in uploaded]}))
+                elif args[:2] == ("release", "download"):
+                    name = args[args.index("--pattern") + 1]
+                    (Path(args[args.index("--dir") + 1]) / name).write_bytes(uploaded[name])
+                    return result()
+                elif args[:2] == ("release", "upload"):
+                    if len(writes) == 1 and not interrupted[0]:
+                        interrupted[0] = True
+                        raise publish.PublishError("synthetic interrupted upload")
+                    file = Path(args[3])
+                    self.assertIn("--clobber", args)
+                    uploaded[file.name] = file.read_bytes()
+                    writes.append(file.name)
+                    return result()
+                elif args[:2] == ("release", "edit"):
+                    edits.append(args)
+                    return result()
+                raise AssertionError(f"Unexpected GitHub request: {args}")
+
+            with patch.dict(os.environ, env), patch.object(release, "ROOT", checkout), patch.object(
+                publish, "ROOT", checkout
+            ), patch.object(build, "ROOT", checkout), patch.object(build, "PLUGIN", checkout / "ExternalNodeBridge"), patch.object(
+                release, "ORIGINAL_V011", old_commit
+            ), patch.object(release, "git", side_effect=transport_git), patch.object(
+                publish, "gh", side_effect=fake_gh
+            ), patch.object(release, "gh", side_effect=fake_gh), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(publish.PublishError, "interrupted upload"):
+                    release.release()
+                self.assertEqual(len(pushes), 1)
+                self.assertFalse(edits)
+                first_tag = original_git(bare, "rev-parse", "refs/tags/v0.1.1").stdout.strip()
+                release.release()
+                self.assertEqual(len(pushes), 1)
+                self.assertEqual(len(writes), 3)
+                self.assertEqual(len(edits), 1)
+                self.assertEqual(original_git(bare, "rev-parse", "refs/tags/v0.1.1").stdout.strip(), first_tag)
+                self.assertEqual(original_git(bare, "rev-parse", "refs/tags/v0.1.1^{commit}").stdout.strip(), commit)
+                for name in names:
+                    self.assertEqual(uploaded[name], (checkout / "dist/0.1.1" / name).read_bytes())
+                self.assertEqual(original_git(checkout, "remote", "get-url", "origin").stdout.strip(), publish.URL.removesuffix(".git"))
+
     def test_dispatch_context_rejects_race_and_wrong_actor(self):
         env = dict(INPUT_VERSION="0.1.1", INPUT_COMMIT="a" * 40,
                    INPUT_CONFIRMATION="REPUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
