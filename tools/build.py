@@ -25,7 +25,6 @@ ROOT_FILES = {
     "package-lock.json",
     "phpunit.xml",
     "pint.json",
-    "upgrade.php",
     "publish.sh",
     "RELEASE_BASE",
 }
@@ -112,7 +111,7 @@ def main():
     html_path = PLUGIN / "resources/assets/console.html"
     original = html_path.read_text()
     html = original
-    for name in ("console.css", "console.js"):
+    for name in ("console.css", "accounts.js", "console.js"):
         query = digest(html_path.parent / name)[:12]
         html, count = re.subn(
             re.escape(name) + r"\?v=[^\"]+", f"{name}?v={query}", html
@@ -131,7 +130,7 @@ def main():
     paths = source_files()
     required = {"publish.sh", "tools/publish.py", "tools/release.py", "RELEASE_BASE",
                 ".github/workflows/test.yml", ".github/workflows/release.yml",
-                f"docs/releases/v{version}.md"}
+                f"docs/releases/v{manifest.get('target_version', version) if manifest.get('release_channel') == 'development' else version}.md"}
     actual = {path.relative_to(ROOT).as_posix() for path in paths}
     missing = required - actual
     if missing:

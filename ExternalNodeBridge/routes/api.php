@@ -14,6 +14,11 @@ Route::prefix('api/v1/external-node-bridge/admin')->middleware('admin')->group(f
     Route::post('debug', [AdminController::class, 'debug']);
     Route::get('status', [AdminController::class, 'status']);
     Route::get('export', [AdminController::class, 'export']);
+    Route::post('preflight', [AdminController::class, 'preflight']);
     Route::post('health', [AdminController::class, 'health']);
     Route::post('refresh', [AdminController::class, 'refresh']);
+    Route::get('accounts', [AdminController::class, 'accounts']);
+    Route::post('account-save', [AdminController::class, 'accountSave']);
+    Route::post('account-action', [AdminController::class, 'accountAction']);
+    Route::post('notifications', [AdminController::class, 'notifications']);
 });

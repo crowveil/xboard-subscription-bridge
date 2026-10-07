@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version without v (for example 0.1.1)
+        description: Version without v (for example 0.2.0)
         required: true
         type: string
       confirmation:
-        description: PUBLISH vX.Y.Z or REPUBLISH v0.1.1
+        description: PUBLISH vX.Y.Z
         required: true
         type: string
       expected_commit:

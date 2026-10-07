@@ -40,10 +40,7 @@ const { chromium } = require('playwright');
       upstream_user_agent: 'clash.meta',
       timeout: 15,
       max_stale: 86400,
-      mihomo_groups: ['🚀 节点选择', '♻️ 自动选择'],
-      singbox_groups: [],
-      ini_groups: [],
-      remove_provider_keys: [],
+      retired_provider_keys: [],
       debug: false,
       debug_until: 0,
       sources: [
@@ -189,7 +186,6 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('.source').count(), 0);
     access = { open: true, expires_at: Math.floor(Date.now() / 1000) + 3600 };
     await page.locator('#retry').click();
-    await page.locator('#enter').click();
     await page.waitForSelector('#workspace:not([hidden])');
     await page.getByLabel('来源名称', { exact: true }).first().fill('保存后关闭');
     await page.locator('#close').click();
@@ -199,7 +195,6 @@ const { chromium } = require('playwright');
     assert.equal(saved, 2);
     access = { open: true, expires_at: Math.floor(Date.now() / 1000) + 3600 };
     await page.locator('#retry').click();
-    await page.locator('#enter').click();
     await page.waitForSelector('#workspace:not([hidden])');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({

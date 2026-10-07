@@ -22,7 +22,8 @@
     active = false,
     busy = false,
     debugActive = false,
-    generation = 0;
+    generation = 0,
+    revision;
   const stamp = (n) => (n ? new Date(n * 1000).toLocaleString() : '—');
   const versionText = (report) => {
     const info = report.converter || {};
@@ -34,6 +35,17 @@
     $('notice').textContent = message;
     $('notice').classList.toggle('error', error);
   };
+  const accountsUI = window.BridgeAccounts.create({
+    api,
+    run,
+    notice,
+    mark,
+    stamp,
+    reload: open,
+    canAct() {
+      if (dirty) throw new Error('请先保存配置，再执行账户操作。');
+    },
+  });
   function token() {
     try {
       const v = JSON.parse(localStorage.getItem('XBOARD_ACCESS_TOKEN'));
@@ -44,28 +56,71 @@
   }
   async function api(path, body) {
     const epoch = generation;
+    const ensureCurrent = () => {
+      if (epoch === generation) return;
+      const error = new Error('管理访问状态已改变，请重新检查。');
+      error.presented = true;
+      throw error;
+    };
     const auth = token();
-    if (!auth) throw new Error('请先在同一域名登录 XBoard 管理后台，再重新检查。');
-    const response = await fetch(apiBase + path, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: {
-        Authorization: auth,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      cache: 'no-store',
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    if (!auth) {
+      const error = new Error('请先在同一域名登录 XBoard 管理后台，再重新检查。');
+      error.state = 'auth';
+      presentFailure(error);
+      throw error;
+    }
+    const operation =
+      {
+        session: '检查管理访问',
+        settings: body === undefined ? '读取配置' : '保存配置',
+        status: '读取运行状态',
+        accounts: '读取上游账户',
+      }[path] || '执行操作';
+    let response;
+    try {
+      response = await fetch(apiBase + path, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {
+          Authorization: auth,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        cache: 'no-store',
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      ensureCurrent();
+      throw new Error(`${operation}失败：无法连接 XBoard，请检查网络后重试。`);
+    }
     const data = await response.json().catch(() => ({}));
-    if (epoch !== generation) throw new Error('管理访问状态已改变，请重新检查。');
+    ensureCurrent();
     if (!response.ok) {
-      if (response.status === 403 && path !== 'session') lock();
-      throw new Error(
+      const message =
         data.error === 'CONSOLE_CLOSED'
           ? '管理访问已关闭或到期。请在插件配置中重新开放。'
-          : data.error ||
-            (response.status === 403 ? '需要 XBoard 管理员登录。' : '请求失败：' + response.status),
-      );
+          : [401, 403].includes(response.status)
+            ? '需要在同一域名重新登录 XBoard 管理后台。'
+            : (data.error && accountsUI.explain(data.error)) || '服务器未能完成请求。';
+      const details = [`${operation}失败（HTTP ${response.status}）：${message}`];
+      if (/^[a-f0-9]{16}$/.test(data.trace)) details.push(`诊断编号：${data.trace}`);
+      const site = data.diagnostic;
+      if (
+        site &&
+        /^[A-Za-z0-9_.-]{1,64}$/.test(site.error_file) &&
+        Number.isInteger(site.error_line)
+      )
+        details.push(`位置：${site.error_file}:${site.error_line}`);
+      const error = new Error(details.join(' · '));
+      error.state =
+        data.error === 'CONSOLE_CLOSED'
+          ? 'closed'
+          : data.error === 'PLUGIN_RESTART_REQUIRED'
+            ? 'restart'
+            : [401, 403].includes(response.status)
+              ? 'auth'
+              : 'unavailable';
+      if (error.state !== 'unavailable') presentFailure(error);
+      throw error;
     }
     return data;
   }
@@ -77,12 +132,20 @@
     dirty = false;
     $('dirty').hidden = true;
   }
-  function lock() {
+  function presentFailure(error) {
+    if (error.presented) return;
+    lock(error.state || 'unavailable');
+    notice(error.message, true);
+    error.presented = true;
+  }
+  function lock(state = 'closed') {
     generation++;
     active = false;
     config = undefined;
     groups = [];
     targets = [];
+    revision = undefined;
+    accountsUI.lock();
     clean();
     $('workspace').hidden = true;
     $('landing').hidden = false;
@@ -94,14 +157,29 @@
       .querySelectorAll('#tab-service input,#tab-service textarea')
       .forEach((i) => (i.value = ''));
     $('close-dialog').close();
-    $('access-title').textContent = '管理控制台已关闭';
-    $('access-help').textContent =
-      '到 XBoard → 插件管理 → 订阅桥接 → 配置，开启“开放管理控制台”并保存。订阅分发继续运行。';
+    const messages = {
+      closed: [
+        '管理控制台已关闭',
+        '到 XBoard → 插件管理 → 订阅桥接 → 配置，开启“开放管理控制台”并保存。订阅分发继续运行。',
+      ],
+      auth: ['需要管理员登录', '请在同一域名登录 XBoard 管理后台，然后点击“重新检查”。'],
+      restart: [
+        '插件组件需要重新加载',
+        '请在 1Panel 重启 XBoard 容器，或重启部署中的 PHP / Octane 常驻服务，然后点击“重新检查”。若仍报错，请检查插件是否完整更新。',
+      ],
+      unavailable: [
+        '管理控制台加载失败',
+        '暂时无法读取管理数据；这不表示控制台开关已关闭。请按上方错误提示排查，然后点击“重新检查”。',
+      ],
+    };
+    [$('access-title').textContent, $('access-help').textContent] = messages[state];
   }
   async function check(enter = false) {
     const state = await api('session');
     access = state.access;
     $('plugin-version').textContent = `XBOARD PLUGIN · v${state.version}`;
+    if (state.release?.channel === 'development')
+      $('plugin-version').textContent += ` · ${state.release.target_version} 开发版`;
     $('summary').textContent =
       `当前保存：${state.summary.sources} 个来源，${state.summary.enabled_sources} 个启用 · 转换服务 ${state.summary.converter_url}`;
     $('access-title').textContent = access.open ? '管理访问已开放' : '管理控制台已关闭';
@@ -111,6 +189,7 @@
     $('enter').hidden = !access.open;
     if (!access.open && active) lock();
     if (enter && access.open) await open();
+    else if (enter) notice('');
   }
   function input(labelText, value, oninput, type = 'text') {
     const label = document.createElement('label');
@@ -278,34 +357,43 @@
     }
   }
   async function open() {
-    const data = await api('settings');
-    config = data.config;
-    groups = data.groups;
-    targets = data.targets;
-    access = data.access;
-    debugActive = data.debug_active;
-    active = true;
-    $('landing').hidden = true;
-    $('workspace').hidden = false;
-    renderSources();
-    for (const k of ['converter_url', 'upstream_user_agent', 'timeout']) $(k).value = config[k];
-    $('max_stale').value = config.max_stale / 3600;
-    for (const k of ['mihomo_groups', 'singbox_groups', 'ini_groups', 'remove_provider_keys'])
-      $(k).value = config[k].join('\n');
-    clean();
-    tick();
-    await status();
+    try {
+      const data = await api('settings');
+      config = data.config;
+      revision = data.revision;
+      groups = data.groups;
+      targets = data.targets;
+      access = data.access;
+      debugActive = data.debug_active;
+      active = true;
+      $('landing').hidden = true;
+      $('workspace').hidden = false;
+      renderSources();
+      for (const k of ['converter_url', 'upstream_user_agent', 'timeout']) $(k).value = config[k];
+      $('max_stale').value = config.max_stale / 3600;
+      const retired = config.retired_provider_keys || [];
+      $('template-review').hidden = !retired.length;
+      $('template-review').textContent = retired.length
+        ? '升级检查：旧配置曾自动移除以下 provider：' +
+          retired.join('、') +
+          '。请从 XBoard 模板中删除对应定义及 use 引用；仍含这些引用的订阅会暂停输出（HTTP 503）。不再提供自动清理。'
+        : '';
+      clean();
+      tick();
+      if (!active) return;
+      await status();
+      if (active) await accountsUI.load(config.sources);
+      if (active) notice('');
+    } catch (error) {
+      presentFailure(error);
+      throw error;
+    }
   }
   function collect() {
     if (!config) throw new Error('管理访问已关闭。');
     for (const k of ['converter_url', 'upstream_user_agent']) config[k] = $(k).value.trim();
     config.timeout = Number($('timeout').value);
     config.max_stale = Number($('max_stale').value) * 3600;
-    for (const k of ['mihomo_groups', 'singbox_groups', 'ini_groups', 'remove_provider_keys'])
-      config[k] = $(k)
-        .value.split('\n')
-        .map((x) => x.trim())
-        .filter(Boolean);
     for (const s of config.sources) {
       if (!s.name.trim() || !s.url.trim()) throw new Error('请填写来源名称和完整订阅地址。');
       s.url = s.url.trim();
@@ -314,7 +402,13 @@
     return config;
   }
   async function save() {
-    await api('settings', { config: collect() });
+    const saved = await api('settings', { config: collect(), revision });
+    revision = saved.revision;
+    if (saved.config) {
+      config = saved.config;
+      renderSources();
+    }
+    await accountsUI.save(config.sources);
     await open();
     notice('配置已保存。需要更新节点时，请执行立即刷新。');
   }
@@ -348,7 +442,9 @@
         labels[s.target] || s.target,
         s.count,
         stamp(s.updated_at),
-        s.error || (s.usable ? '可用' : '待刷新'),
+        s.error === 'NO_COMPATIBLE_NODES'
+          ? '无兼容节点，已跳过'
+          : s.error || (s.usable ? '可用' : '待刷新'),
       ]) {
         const td = document.createElement('td');
         td.textContent = String(v);
@@ -361,24 +457,37 @@
   async function run(fn) {
     if (busy) return;
     busy = true;
+    $('workspace').setAttribute('aria-busy', 'true');
     const controls = [
       ...document.querySelectorAll(
-        '#workspace button:not(#close),#workspace input,#workspace textarea',
+        '#workspace button:not(#close),#workspace input,#workspace textarea,#workspace select',
       ),
     ];
+    const disabled = controls.map((b) => b.disabled);
     controls.forEach((b) => (b.disabled = true));
     try {
       await fn();
     } catch (e) {
-      notice(e.message, true);
+      if (!e.presented) notice(accountsUI.explain(e.message), true);
     } finally {
       busy = false;
-      controls.forEach((b) => (b.disabled = false));
+      $('workspace').setAttribute('aria-busy', 'false');
+      controls.forEach((b, i) => (b.disabled = disabled[i]));
     }
   }
+  $('preflight').onclick = () =>
+    run(async () => {
+      const report = await api('preflight', {});
+      const failed = Object.entries(report.checks || {})
+        .filter(([, ok]) => !ok)
+        .map(([name]) => name);
+      $('deployment-state').textContent = report.ok
+        ? '文件与读写自检通过。重建后仍须保留插件目录、私有数据目录和原 APP_KEY。'
+        : '检查未通过：' + failed.join('、') + '。状态：' + accountsUI.explain(report.state);
+    });
   $('save').onclick = () => run(save);
   $('enter').onclick = () => run(open);
-  $('retry').onclick = () => run(() => check());
+  $('retry').onclick = () => run(() => check(true).catch(presentFailure));
   $('add').onclick = () => {
     if (config.sources.length >= 20) return notice('最多支持 20 个来源。', true);
     config.sources.push({
@@ -418,7 +527,7 @@
     });
   $('debug').onclick = () =>
     run(async () => {
-      await api('debug', { enabled: !debugActive });
+      revision = (await api('debug', { enabled: !debugActive })).revision;
       await status();
     });
   $('reload-status').onclick = () => run(status);
@@ -464,16 +573,7 @@
           .forEach((p) => (p.hidden = p.id !== 'tab-' + b.dataset.tab));
       }),
   );
-  for (const k of [
-    'converter_url',
-    'upstream_user_agent',
-    'timeout',
-    'max_stale',
-    'mihomo_groups',
-    'singbox_groups',
-    'ini_groups',
-    'remove_provider_keys',
-  ])
+  for (const k of ['converter_url', 'upstream_user_agent', 'timeout', 'max_stale'])
     $(k).addEventListener('input', mark);
   window.addEventListener('beforeunload', (e) => {
     if (dirty) {
@@ -486,18 +586,11 @@
       lock();
       notice('另一标签页已关闭控制台。');
     }
-    if (e.key === 'XBOARD_ACCESS_TOKEN') lock();
+    if (e.key === 'XBOARD_ACCESS_TOKEN') lock('auth');
   });
   setInterval(tick, 1000);
   setInterval(() => {
-    if (active && !busy)
-      check().catch((e) => {
-        lock();
-        notice(e.message, true);
-      });
+    if (active && !busy) check().catch(presentFailure);
   }, 10000);
-  check(true).catch((e) => {
-    lock();
-    notice(e.message, true);
-  });
+  check(true).catch(presentFailure);
 })();

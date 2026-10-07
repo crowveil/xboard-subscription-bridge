@@ -4,11 +4,17 @@
 
 XBoard 原生客户端中间件验证订阅 token 和用户状态。插件在 `client.subscribe.servers` 钩子以优先级 10000 接收节点，使用 XBoard 实际选择的生成器生成订阅，再合并当前用户权限组可使用的外部缓存。
 
-`SubscriptionBridge` 负责生成器与转换目标映射、权限过滤和响应拦截；`Merger` 处理 YAML / JSON 结构及节点引用，`TextNodes` 处理 URI、INI 和文本格式。原有规则与 DNS 保留，外部节点凭据不替换为 XBoard 用户 UUID。高于此钩子优先级数字的其他订阅拦截插件需要单独验证兼容性。
+`SubscriptionBridge` 负责鉴权后的来源筛选、目标缓存读取和响应拦截。模板格式先生成干净的原生响应以供回退，再由 `TemplateBridge` 创建最终同名的临时 Shadowsocks 节点。在 `protocol.servers.filtered` 优先级 10000 的钩子中，将它们加入当前请求已过滤的原生节点。这个钩子不负责外部节点的真实协议兼容判断。
+
+XBoard 第二次生成负责模板分组。`TemplateBridge` 验证随机标记和一对一映射，将节点定义替换为对应格式的完整转换器输出，保留原生策略组、DNS 和规则。名称及节点间依赖在生成前统一去重。临时上下文在 finally 中清除，不写数据库、不存静态可变状态。生成或替换失败时返回第一次原生响应；其他插件在临时生成阶段抛出的响应拦截也不能携带临时节点逃逸。
+
+`Merger` 负责节点抽取、URI 和 SIP008 列表；`TextNodes` 处理文本节点。Clash 系列、Sing-box、Surge / Surfboard 走原生模板装配；Loon 和 Quantumult X 使用 XBoard 的原生节点列表入口。未来新增目标需显式适配，不能按字符串猜测。
+
+旧 provider 清理字段只导入为只读升级检查名单，不再删除模板内容。若旧名单仍出现在当前模板的 provider 定义或 use 引用中，返回 503 并提示检查，防止升级静默恢复旧来源。正常模板不受影响。
 
 ## 刷新与缓存
 
-`BridgeCommand` 注册每分钟运行的调度任务，`Refresher` 按来源间隔刷新已启用且有授权组的来源。`Converter` 请求独立 SubConverter-Extended 的节点列表，固定上游 User-Agent，禁用默认远程规则预设。
+插件 `schedule()` 注册每分钟运行的调度任务，`Refresher` 按来源间隔刷新已启用且有授权组的来源。`Converter` 请求独立 SubConverter-Extended 的节点列表，固定上游 User-Agent，禁用默认远程规则预设。
 
 `NodeCache` 按来源、订阅地址、目标格式、转换器配置和 UA 隔离缓存。用户请求只读取缓存。网络错误等暂时故障可使用年龄限制内的旧缓存；明确拒绝、无兼容节点、缓存过期时停止下发相应来源格式。内部缓存修订字段用于兼容已有缓存键，不作为转换器的实际版本。
 
@@ -21,6 +27,8 @@ XBoard 原生客户端中间件验证订阅 token 和用户状态。插件在 `c
 ## 配置与诊断
 
 `Settings` 统一校验与规范化来源配置；`PrivateStore` 使用 XBoard `APP_KEY` 加密私有状态，保存到 `storage/app/external-node-bridge`。原生插件配置只保留转换服务地址和控制台开关；迁移逻辑在覆盖原生配置前保留旧数据。
+
+`RuntimeCompatibility` 检查已加载组件的接口；运行诊断与磁盘 manifest 分开呈现。接口兼容不等于所有代码已重载，升级仍需要重启常驻进程。
 
 `Diagnostics` 只写入允许列表中的事件、数量和错误代码；`Report` 汇总来源状态。日志不记录原始订阅、地址、密码、UUID、token 或异常全文。Debug 有独立有效期。
 

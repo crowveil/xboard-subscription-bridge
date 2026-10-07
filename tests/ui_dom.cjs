@@ -32,10 +32,7 @@ let config = {
   upstream_user_agent: 'clash.meta',
   timeout: 15,
   max_stale: 86400,
-  mihomo_groups: ['🚀 节点选择'],
-  singbox_groups: [],
-  ini_groups: [],
-  remove_provider_keys: [],
+  retired_provider_keys: [],
   debug: false,
   debug_until: 0,
   sources: [
@@ -105,7 +102,9 @@ w.fetch = async (url, options) => {
     };
   else if (action === 'status' || action === 'export')
     data = {
-      sources: [],
+      sources: [
+        { source_id: '1', target: 'sssub', count: 0, usable: false, error: 'NO_COMPATIBLE_NODES' },
+      ],
       events: [{ event: 'TEST' }],
       debug_active: config.debug,
       converter_version: 'v1.9.6',
@@ -151,6 +150,7 @@ async function reopen() {
 }
 (async () => {
   try {
+    w.eval(fs.readFileSync(assets + '/accounts.js', 'utf8'));
     w.eval(fs.readFileSync(assets + '/console.js', 'utf8'));
     await wait(() => !$('workspace').hidden);
     await pause();
@@ -161,6 +161,12 @@ async function reopen() {
     assert.equal(field(d.querySelector('.source'), '订阅地址').value, config.sources[0].url);
     assert.equal(d.querySelector('select[multiple]'), null);
     assert.equal($('cache_revision'), null);
+    for (const id of ['mihomo_groups', 'singbox_groups', 'ini_groups', 'remove_provider_keys']) {
+      assert.equal($(id), null);
+      assert.equal(Object.hasOwn(config, id), false);
+    }
+    assert.equal($('template-review').hidden, true);
+    assert.match($('states').textContent, /无兼容节点，已跳过/);
     await click('add');
     let source = d.querySelectorAll('.source')[1];
     fill(field(source, '来源名称'), '新来源');
@@ -188,7 +194,11 @@ async function reopen() {
     await wait(() => $('workspace').hidden);
     assert.equal(config.sources[0].name, '现有来源');
     assert.equal(d.querySelectorAll('.source').length, 0);
+    config.retired_provider_keys = ['old-provider'];
     await reopen();
+    assert.equal($('template-review').hidden, false);
+    assert.match($('template-review').textContent, /old-provider.*HTTP 503/);
+    config.retired_provider_keys = [];
     fill(field(d.querySelector('.source'), '来源名称'), '保存后关闭');
     await click('close');
     await click('save-close');

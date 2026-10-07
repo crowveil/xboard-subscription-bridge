@@ -29,11 +29,16 @@ final class SubscriptionBridge
                 return $servers;
             }
             $ctx['target'] = $target;
+            TemplateBridge::checkTemplate($target, $c);
             $sources = Settings::authorized($c, $user->group_id, $target);
             $log->record('AUTHORIZED_SOURCES', $ctx + ['count' => count($sources)]);
             $cache = new NodeCache($c, $log);
             $batches = [];
             foreach ($sources as $source) {
+                if (Upstream\AccountStore::suspended(Upstream\AccountStore::read($source['id']))) {
+                    $log->record('SOURCE_ROTATION_PENDING', $ctx + ['source_id' => $source['id']]);
+                    continue;
+                }
                 $e = $cache->read($source, $target);
                 $usable = $cache->usable($e);
                 $log->record('CACHE_LOOKUP', $ctx + ['source_id' => $source['id'], 'state' => $usable ? 'hit' : 'miss', 'count' => $usable ? count($e['nodes']) : 0]);
@@ -50,7 +55,7 @@ final class SubscriptionBridge
                 if ($response->getStatusCode() !== 200) {
                     return $servers;
                 }
-                $result = Merger::merge($response->getContent(), $target, $batches, $c, $request->only(['types', 'filter']));
+                $result = self::compose($request, $user, $servers, $response->getContent(), $target, $batches, $c);
                 $response->setContent($result['body']);
                 // JsonResponse retains the original structured data, but setContent
                 // supplies the final wire representation used by Symfony send().
@@ -67,6 +72,10 @@ final class SubscriptionBridge
         } catch (\App\Services\Plugin\InterceptResponseException $e) {
             throw $e; // Preserve other plugins' explicit response interception.
         } catch (\Throwable $e) {
+            if ($e instanceof BridgeException && $e->reason === 'TEMPLATE_PROVIDER_REVIEW_REQUIRED') {
+                (new Diagnostics($c))->record($e->reason, $ctx, true);
+                HookManager::intercept(response('订阅模板需要管理员检查。', 503)->header('Cache-Control', 'no-store'));
+            }
             ($log ?? new Diagnostics(['debug' => false]))->record('BRIDGE_FALLBACK', $ctx + ['error' => $e instanceof BridgeException ? $e->reason : 'UNEXPECTED_ERROR'] + Diagnostics::errorSite($e), true);
             // If generation succeeded, use that exact original response on merge failure.
         }
@@ -74,5 +83,12 @@ final class SubscriptionBridge
             HookManager::intercept($response);
         }
         return $servers;
+    }
+
+    public static function compose(Request $request, mixed $user, array $servers, string $original, string $target, array $batches, array $settings): array
+    {
+        return TemplateBridge::supports($target)
+            ? TemplateBridge::render($request, $user, $servers, $original, $target, $batches)
+            : Merger::merge($original, $target, $batches, $settings, $request->only(['types', 'filter']));
     }
 }

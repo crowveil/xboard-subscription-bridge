@@ -16,6 +16,23 @@ final class Refresher
 
     public function refresh(array $source, string $target, bool $force = false): array
     {
+        Settings::requireEnabled();
+        $result = Upstream\AccountStore::locked($source['id'], function () use ($source, $target, $force) {
+            $state = Upstream\AccountStore::read($source['id']);
+            if (Upstream\AccountStore::suspended($state)) {
+                throw new BridgeException('UPSTREAM_ROTATION_PENDING');
+            }
+            if (!empty($state['config']) && Upstream\AccountManager::source($source['id'])['url'] !== $source['url']) {
+                throw new BridgeException('SETTINGS_CHANGED');
+            }
+            return $this->refreshLocked($source, $target, $force);
+        });
+        Upstream\AccountManager::refreshed($source['id'], $target, $source, $result);
+        return $result;
+    }
+
+    private function refreshLocked(array $source, string $target, bool $force): array
+    {
         if (!$source['enabled'] || !$source['group_ids'] || !in_array($target, $source['targets'], true)) {
             throw new BridgeException('SOURCE_NOT_ACTIVE');
         }
@@ -62,15 +79,16 @@ final class Refresher
                 $this->log->record('REFRESH_OK', $ctx + ['count' => count($nodes), 'duration_ms' => (int) ((microtime(true) - $start) * 1000)]);
             } catch (BridgeException $e) {
                 $entry['error'] = $e->reason;
-                // Explicit origin revocation still clears data. A new converter
-                // emitting malformed output must not destroy the last valid set.
-                if (($e->httpStatus >= 400 && $e->httpStatus < 500 && $e->httpStatus !== 429) || in_array($e->reason, ['NO_COMPATIBLE_NODES', 'OUTPUT_INVALID', 'NODE_INVALID', 'PROVIDER_OUTPUT_REJECTED', 'URI_OUTPUT_INVALID'], true)) {
-                    if (!$changed || ($e->httpStatus >= 400 && $e->httpStatus < 500 && $e->httpStatus !== 429) || $e->reason === 'NO_COMPATIBLE_NODES') {
-                        $entry['nodes'] = [];
-                        $entry['updated_at'] = null;
-                    }
+                if (self::invalidatesCache($e, $changed)) {
+                    $entry['nodes'] = [];
+                    $entry['updated_at'] = null;
                 }
-                $this->log->record('REFRESH_FAILED', $ctx + ['error' => $e->reason, 'http_status' => $e->httpStatus], true);
+                if ($e->reason === 'NO_COMPATIBLE_NODES') {
+                    $entry['converter_version'] = $version;
+                    $this->log->record('REFRESH_EMPTY', $ctx + ['count' => 0]);
+                } else {
+                    $this->log->record('REFRESH_FAILED', $ctx + ['error' => $e->reason, 'http_status' => $e->httpStatus], true);
+                }
             }
             $this->cache->write($source, $target, $entry);
             if ($this->log->active()) {
@@ -88,10 +106,11 @@ final class Refresher
 
     public function due(): void
     {
+        Settings::requireEnabled();
         $start = time();
         $this->converter->version();
         foreach ($this->config['sources'] as $source) {
-            if (!$source['enabled'] || !$source['group_ids']) {
+            if (!$source['enabled'] || !$source['group_ids'] || Upstream\AccountStore::suspended(Upstream\AccountStore::read($source['id']))) {
                 continue;
             }
             foreach ($source['targets'] as $target) {
@@ -105,5 +124,17 @@ final class Refresher
                 }
             }
         }
+    }
+
+    private static function invalidatesCache(BridgeException $error, bool $converterChanged): bool
+    {
+        $rejected = $error->httpStatus >= 400 && $error->httpStatus < 500 && $error->httpStatus !== 429;
+        if ($rejected || $error->reason === 'NO_COMPATIBLE_NODES') {
+            return true;
+        }
+        // A converter change cannot discard valid cached nodes solely for malformed output.
+        return !$converterChanged && in_array($error->reason, [
+            'OUTPUT_INVALID', 'NODE_INVALID', 'PROVIDER_OUTPUT_REJECTED', 'URI_OUTPUT_INVALID',
+        ], true);
     }
 }

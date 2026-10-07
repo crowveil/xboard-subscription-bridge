@@ -73,12 +73,10 @@ final class BridgeTest extends BridgeTestCase
     }
     public function testMergeFailureReturnsExactOriginalResponse(): void
     {
-        $this->settings['mihomo_groups'] = [];
-        $this->saveSettings($this->settings);
         $original = $this->subscribe('user-a-token')->getContent();
-        $this->cache('a', 'mihomo', [self::node()]);
+        $this->cache('a', 'mihomo', [self::node(), self::node()]);
         $this->assertSame($original, $this->subscribe('user-a-token')->getContent());
-        $this->assertStringContainsString('NO_DESTINATION_GROUP', json_encode((new Diagnostics($this->settings))->recent()));
+        $this->assertStringContainsString('DUPLICATE_SOURCE_NAME', json_encode((new Diagnostics($this->settings))->recent()));
     }
     public function testNativeAdminGateRejectsAnonymousAndNonAdmin(): void
     {
@@ -114,29 +112,27 @@ final class BridgeTest extends BridgeTestCase
         $cache = new NodeCache($c, new Diagnostics($c));
         $this->assertSame([], $cache->read($c['sources'][0], 'mihomo'));
     }
-    public function testProviderRemovalPreservesRuleProvidersAndRebuildsEmptyGroups(): void
+    public function testRetiredProviderGuardNeverSilentlyExposesOldSource(): void
     {
-        $base = ['proxies' => [], 'proxy-providers' => ['old' => ['url' => 'secret'], 'keep' => ['url' => 'other']], 'rule-providers' => ['rules' => ['url' => 'rules']], 'proxy-groups' => [['name' => '🚀 节点选择', 'type' => 'select', 'proxies' => ['DIRECT'], 'use' => ['old', 'keep']]], 'rules' => ['MATCH,🚀 节点选择']];
-        $c = $this->settings;
-        $c['remove_provider_keys'] = ['old'];
-        $r = Merger::merge(Yaml::dump($base, 8), 'mihomo', [['source_id' => 'a', 'nodes' => [self::node()]]], $c);
-        $out = Yaml::parse($r['body']);
-        $this->assertArrayNotHasKey('old', $out['proxy-providers']);
-        $this->assertSame($base['rule-providers'], $out['rule-providers']);
-        $this->assertSame(['keep'], $out['proxy-groups'][0]['use']);
-        $auto = collect($out['proxy-groups'])->firstWhere('name', '♻️ 自动选择');
-        $this->assertSame('url-test', $auto['type']);
-        $this->assertContains('[a] HK', $auto['proxies']);
+        $raw = $this->settings;
+        unset($raw['retired_provider_keys']);
+        $raw['remove_provider_keys'] = ['old'];
+        $this->saveSettings(Settings::normalize($raw));
+        $GLOBALS['test_templates']['clashmeta'] = "proxies: []\nproxy-providers: {old: {url: 'https://example.test/secret'}}\nproxy-groups: []\nrules: []\n";
+        $this->assertSame(503, $this->subscribe('user-b-token')->getStatusCode());
+        $GLOBALS['test_templates']['clashmeta'] = "proxies: []\nproxy-groups: []\nrules: []\n";
+        $this->assertSame(200, $this->subscribe('user-b-token')->getStatusCode());
+        $this->assertArrayNotHasKey('remove_provider_keys', Settings::load());
     }
     public function testDependenciesAreRemappedAndBrokenChainsRemoved(): void
     {
         $nodes = [self::node('Exit'), self::node('Relay') + ['dialer-proxy' => 'Exit'], self::node('Broken') + ['dialer-proxy' => 'Missing'], self::node('Cycle') + ['dialer-proxy' => 'Cycle']];
         $base = "proxies: []\nproxy-groups: []\nrules: []\n";
-        $out = Merger::merge($base, 'mihomo', [['source_id' => 'a', 'nodes' => $nodes]], $this->settings);
-        $byName = array_column(Yaml::parse($out['body'])['proxies'], null, 'name');
+        $out = \Plugin\ExternalNodeBridge\Services\TemplateBridge::prepare($base, 'mihomo', [['source_id' => 'a', 'nodes' => $nodes]], []);
+        $byName = $out[0];
         $this->assertSame('[a] Exit', $byName['[a] Relay']['dialer-proxy']);
         $this->assertCount(2, $byName);
-        $this->assertSame(2, $out['skipped']);
+        $this->assertSame(2, $out[1]);
     }
     public function testTypesAndNameFilterApplyToExternalNodes(): void
     {

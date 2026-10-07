@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": "github:crowveil/xboard-subscription-bridge",
   "scripts": {
-    "test": "node tests/ui_dom.cjs",
+    "test": "node tests/ui_dom.cjs && node tests/ui_accounts.cjs",
     "test:browser": "node tests/ui_smoke.cjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

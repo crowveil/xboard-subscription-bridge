@@ -7,8 +7,14 @@ final class TextNodes
 {
     public static function extract(string $body, string $target): array
     {
-        if ($target === 'quanx' && !str_contains($body, '=')) {
-            $body = base64_decode(trim($body), true) ?: '';
+        if ($target === 'quanx') {
+            $encoded = preg_replace('/\s/', '', $body);
+            if (preg_match('/^[A-Za-z0-9+\/]+={0,2}$/D', $encoded)) {
+                $decoded = base64_decode($encoded, true);
+                if ($decoded !== false) {
+                    $body = $decoded;
+                }
+            }
         }
         $nodes = [];
         $section = null;
@@ -53,31 +59,28 @@ final class TextNodes
 
     public static function merge(string $original, string $target, array $batches, array $settings, array $query): array
     {
-        $ini = in_array($target, ['surge', 'surfboard'], true);
+        if (in_array($target, ['surge', 'surfboard'], true)) {
+            throw new BridgeException('TEMPLATE_RENDER_REQUIRED');
+        }
         $base = $target === 'quanx' ? base64_decode(preg_replace('/\s/', '', $original), true) : $original;
         if ($base === false) {
             throw new BridgeException('BASE_CONFIG_INVALID');
         }
         $lines = preg_split('/\r?\n/', $base);
-        $section = null;
         $used = [];
         foreach ($lines as $line) {
             if (preg_match('/^\s*\[([^]]+)\]\s*$/', $line, $m)) {
-                $section = strtolower($m[1]);
                 continue;
             }
-            if (!$ini || in_array($section, ['proxy', 'proxy group'], true)) {
-                if ($target === 'quanx') {
-                    if (preg_match('/,\s*tag\s*=\s*(.+)$/', $line, $m)) {
-                        $used[trim($m[1], ' "')] = true;
-                    }
-                } elseif (str_contains($line, '=')) {
-                    $used[trim(explode('=', $line, 2)[0], ' "')] = true;
+            if ($target === 'quanx') {
+                if (preg_match('/,\s*tag\s*=\s*(.+)$/', $line, $m)) {
+                    $used[trim($m[1], ' "')] = true;
                 }
+            } elseif (str_contains($line, '=')) {
+                $used[trim(explode('=', $line, 2)[0], ' "')] = true;
             }
         }
         $added = [];
-        $names = [];
         $skipped = 0;
         foreach ($batches as $batch) {
             foreach ($batch['nodes'] as $node) {
@@ -96,7 +99,6 @@ final class TextNodes
                     $name = $baseName.' ('.$i++.')';
                 }
                 $used[$name] = true;
-                $names[] = $name;
                 $added[] = $target === 'quanx'
                     ? preg_replace_callback('/(,\s*tag\s*=\s*)[^,]+$/i', fn ($m) => $m[1].$name, $node['line'])
                     : $name.' = '.ltrim(explode('=', $node['line'], 2)[1]);
@@ -108,39 +110,9 @@ final class TextNodes
         if (count($used) > Merger::MAX_NODES) {
             throw new BridgeException('TOO_MANY_NODES');
         }
-        if ($ini) {
-            $output = [];
-            $section = null;
-            $inserted = false;
-            $groups = 0;
-            foreach ($lines as $line) {
-                if (preg_match('/^\s*\[([^]]+)\]\s*$/', $line, $m)) {
-                    if ($section === 'proxy' && !$inserted) {
-                        $output = array_merge($output, $added);
-                        $inserted = true;
-                    }
-                    $section = strtolower($m[1]);
-                } elseif ($section === 'proxy group' && preg_match('/^\s*([^=]+?)\s*=\s*(select|url-test|fallback|load-balance)\s*(,.*)?$/i', $line, $m)) {
-                    if (!$settings['ini_groups'] || in_array(trim($m[1]), $settings['ini_groups'], true)) {
-                        $line = $m[1].' = '.$m[2].', '.implode(', ', $names).($m[3] ?? '');
-                        $groups++;
-                    }
-                }
-                $output[] = $line;
-            }
-            if ($section === 'proxy' && !$inserted) {
-                $output = array_merge($output, $added);
-                $inserted = true;
-            }
-            if (!$inserted || !$groups) {
-                throw new BridgeException('NO_DESTINATION_GROUP');
-            }
-            $body = implode("\n", $output);
-        } else {
-            $body = rtrim($base)."\r\n".implode("\r\n", $added)."\r\n";
-            if ($target === 'quanx') {
-                $body = base64_encode($body);
-            }
+        $body = rtrim($base)."\r\n".implode("\r\n", $added)."\r\n";
+        if ($target === 'quanx') {
+            $body = base64_encode($body);
         }
         if (strlen($body) > Merger::MAX_BYTES) {
             throw new BridgeException('RESPONSE_TOO_LARGE');

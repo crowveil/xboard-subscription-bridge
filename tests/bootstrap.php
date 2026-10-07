@@ -75,6 +75,7 @@ abstract class BridgeTestCase extends PHPUnit\Framework\TestCase
             $t->boolean('available')->default(true);
             $t->boolean('is_admin')->default(false);
             $t->string('uuid');
+            $t->integer('expired_at')->nullable();
         });
         $schema->create('v2_server_group', function ($t) {
             $t->increments('id');

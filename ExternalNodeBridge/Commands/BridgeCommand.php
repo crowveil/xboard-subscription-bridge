@@ -7,12 +7,23 @@ use Plugin\ExternalNodeBridge\Services\{BridgeException, Refresher, Report, Sett
 
 final class BridgeCommand extends Command
 {
-    protected $signature = 'external-nodes:manage {action=status : status|refresh|diagnose} {--source=} {--target=} {--force}';
+    protected $signature = 'external-nodes:manage {action=status : status|refresh|diagnose|selfcheck|repair-assets} {--source=} {--target=} {--force}';
     protected $description = 'Refresh external subscriptions or export credential-free diagnostics';
 
     public function handle(): int
     {
         try {
+            if ($this->argument('action') === 'selfcheck') {
+                $report = \Plugin\ExternalNodeBridge\Services\DeploymentCheck::inspect(true);
+                $this->line(json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+                return $report['ok'] ? 0 : 1;
+            }
+            if ($this->argument('action') === 'repair-assets') {
+                Settings::requireEnabled();
+                \Plugin\ExternalNodeBridge\Services\Assets::publish(true, true);
+                $this->info('Console assets restored; private settings unchanged.');
+                return 0;
+            }
             $c = Settings::load();
             if (in_array($this->argument('action'), ['status', 'diagnose'], true)) {
                 $report = Report::make($c);

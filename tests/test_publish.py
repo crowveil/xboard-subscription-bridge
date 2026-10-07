@@ -73,6 +73,18 @@ class RealRemoteTests(unittest.TestCase):
 
 
 class PublishTests(unittest.TestCase):
+    def test_notes_are_offline_and_match_release_body(self):
+        version = json.loads((publish.ROOT / "ExternalNodeBridge/config.json").read_text())["version"]
+        expected = (publish.ROOT / f"docs/releases/v{version}.md").read_text(encoding="utf-8")
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["publish.py", "--notes"]), patch.object(
+            publish, "publish"
+        ) as push, patch.object(publish, "gh") as gh, contextlib.redirect_stdout(output):
+            self.assertEqual(publish.main(), 0)
+        self.assertEqual(output.getvalue(), expected + "\n")
+        push.assert_not_called()
+        gh.assert_not_called()
+
     def test_wrong_account_stops_before_auth_status(self):
         with patch.object(
             publish, "gh", return_value=result(stdout="another-account\n")
@@ -88,21 +100,13 @@ class PublishTests(unittest.TestCase):
             with self.assertRaises(publish.PublishError):
                 publish.remote(Path("."))
 
-    def test_existing_release_is_immutable_except_v011_repair(self):
-        existing = {"object": {"type": "commit", "sha": "1" * 40}}
-        with patch.object(publish, "api_optional", return_value=existing):
+    def test_existing_release_cannot_be_overwritten(self):
+        with patch.object(publish, "api_optional", return_value={"draft": False}):
             with self.assertRaisesRegex(publish.PublishError, "递增版本号"):
-                publish.validate_release_state("0.1.1", False)
-            publish.validate_release_state("0.1.1", True)
-            with self.assertRaisesRegex(publish.PublishError, "只允许"):
-                publish.validate_release_state("0.1.2", True)
-
-    def test_repair_requires_both_tag_and_release(self):
-        with patch.object(
-            publish, "api_optional", side_effect=[{"object": {}}, None]
-        ):
-            with self.assertRaisesRegex(publish.PublishError, "不存在"):
-                publish.validate_release_state("0.1.1", True)
+                publish.validate_release_state("0.2.0")
+            publish.validate_release_state("0.2.0", check_only=True)
+        with patch.object(publish, "api_optional", return_value={"draft": True}):
+            publish.validate_release_state("0.2.0")
 
     def test_wait_for_tests_watches_matching_main_run(self):
         runs = [
@@ -120,7 +124,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(publish.wait_for_tests("abc", attempts=1, delay=0), "42")
             watch.assert_called_once_with("42")
 
-    def test_dispatch_uses_exact_repair_confirmation_and_new_run(self):
+    def test_dispatch_uses_exact_confirmation_and_new_run(self):
         old = {
             "databaseId": 10,
             "headBranch": "main",
@@ -136,7 +140,7 @@ class PublishTests(unittest.TestCase):
         ), patch.object(publish, "account"), patch.object(publish, "watch") as watch:
             self.assertEqual(
                 publish.dispatch_release(
-                    "0.1.1", "abc", True, attempts=1, delay=0
+                    "0.1.1", "abc", attempts=1, delay=0
                 ),
                 "11",
             )
@@ -152,7 +156,7 @@ class PublishTests(unittest.TestCase):
                     "-f",
                     "version=0.1.1",
                     "-f",
-                    "confirmation=REPUBLISH v0.1.1",
+                    "confirmation=PUBLISH v0.1.1",
                     "-f",
                     "expected_commit=abc",
                 ),
@@ -163,8 +167,19 @@ class PublishTests(unittest.TestCase):
     def test_main_change_stops_dispatch(self):
         with patch.object(publish, "api_optional", return_value={"object": {"sha": "other"}}), patch.object(publish, "gh") as gh:
             with self.assertRaises(publish.PublishError):
-                publish.dispatch_release("0.1.1", "abc", True)
+                publish.dispatch_release("0.1.1", "abc")
             gh.assert_not_called()
+
+    def test_development_manifest_blocks_publication_before_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ExternalNodeBridge").mkdir()
+            (root / "ExternalNodeBridge/config.json").write_text(json.dumps({"release_channel": "development"}))
+            with patch.object(publish, "ROOT", root), patch.object(publish, "gh") as gh, patch.object(publish, "git") as git:
+                with self.assertRaisesRegex(publish.PublishError, "开发版"):
+                    publish.publish()
+                gh.assert_not_called()
+                git.assert_not_called()
 
     def test_real_git_source_check_failure_and_resume(self):
         original_git = publish.git
@@ -178,6 +193,12 @@ class PublishTests(unittest.TestCase):
                     target = base / file.relative_to(original_root)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(file, target)
+            for base in (source, seed):
+                manifest_path = base / "ExternalNodeBridge/config.json"
+                manifest = json.loads(manifest_path.read_text())
+                manifest["version"] = "0.1.1"
+                manifest.pop("release_channel", None)
+                manifest_path.write_text(json.dumps(manifest))
             original_git(seed, "init", "--initial-branch=main")
             for key, value in (("user.name", publish.NAME), ("user.email", publish.EMAIL), ("commit.gpgsign", "false")):
                 original_git(seed, "config", "--local", key, value)
@@ -209,9 +230,9 @@ class PublishTests(unittest.TestCase):
             with patch.object(publish, "ROOT", source), patch.object(build, "ROOT", source), patch.object(
                 publish, "git", side_effect=local_git
             ), patch.object(publish, "account"), patch.object(publish, "gh", side_effect=fake_gh), patch.object(
-                publish, "api_optional", return_value={"draft": False, "object": {"sha": base_sha}}
+                publish, "api_optional", return_value=None
             ), patch.object(publish.shutil, "which", return_value="available"), patch(
-                "builtins.input", return_value="REPUBLISH v0.1.1"
+                "builtins.input", return_value="PUBLISH v0.1.1"
             ), patch.object(publish, "wait_for_tests") as tests, patch.object(
                 publish, "dispatch_release"
             ) as dispatch, contextlib.redirect_stdout(io.StringIO()):
@@ -220,18 +241,18 @@ class PublishTests(unittest.TestCase):
                 dispatch.assert_not_called()
                 tests.side_effect = publish.PublishError("synthetic failed tests")
                 with self.assertRaisesRegex(publish.PublishError, "failed tests"):
-                    publish.publish(replace_existing=True)
+                    publish.publish()
                 self.assertEqual(len(pushes), 1)
                 dispatch.assert_not_called()
                 head = original_git(bare, "rev-parse", "main").stdout.strip()
                 tests.side_effect = None
                 dispatch.side_effect = publish.PublishError("synthetic network interruption")
                 with self.assertRaisesRegex(publish.PublishError, "network interruption"):
-                    publish.publish(replace_existing=True)
+                    publish.publish()
                 self.assertEqual(len(pushes), 1)
                 dispatch.side_effect = None
-                publish.publish(replace_existing=True)
-                dispatch.assert_called_with("0.1.1", head, True)
+                publish.publish()
+                dispatch.assert_called_with("0.1.1", head)
                 self.assertEqual(len(pushes), 1)
                 self.assertEqual(original_git(bare, "rev-parse", "main^").stdout.strip(), base_sha)
 
@@ -251,6 +272,11 @@ class ReleaseTests(unittest.TestCase):
                 target = checkout / file.relative_to(original_root)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(file, target)
+            manifest_path = checkout / "ExternalNodeBridge/config.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["version"] = "0.1.1"
+            manifest.pop("release_channel", None)
+            manifest_path.write_text(json.dumps(manifest))
             original_git(checkout, "init", "--initial-branch=main")
             for key, value in (("user.name", publish.NAME), ("user.email", publish.EMAIL),
                                ("commit.gpgsign", "false"), ("tag.gpgsign", "false")):
@@ -259,27 +285,27 @@ class ReleaseTests(unittest.TestCase):
             original_git(checkout, "add", "--all")
             original_git(checkout, "commit", "-m", "Synthetic original release")
             old_commit = original_git(checkout, "rev-parse", "HEAD").stdout.strip()
-            original_git(checkout, "tag", "-a", "v0.1.1", "-m", "Synthetic original tag")
             original_git(root, "clone", "--bare", str(checkout), str(bare))
             original_git(checkout, "remote", "add", "origin", publish.URL.removesuffix(".git"))
             with (checkout / "README.md").open("a") as file:
-                file.write("\nSynthetic repaired source\n")
+                file.write("\nSynthetic updated source\n")
             original_git(checkout, "add", "README.md")
-            original_git(checkout, "commit", "-m", "Synthetic repair")
+            original_git(checkout, "commit", "-m", "Synthetic update")
             commit = original_git(checkout, "rev-parse", "HEAD").stdout.strip()
             env = dict(INPUT_VERSION="0.1.1", INPUT_COMMIT=commit,
-                       INPUT_CONFIRMATION="REPUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
+                       INPUT_CONFIRMATION="PUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
                        GITHUB_ACTOR="crowveil", GITHUB_TRIGGERING_ACTOR="crowveil",
                        GITHUB_REF="refs/heads/main", GITHUB_SHA=commit,
                        GITHUB_EVENT_NAME="workflow_dispatch")
             names = ("ExternalNodeBridge-0.1.1.zip", "xboard-subscription-bridge-0.1.1-source.zip", "SHA256SUMS")
-            uploaded = {name: b"synthetic old asset" for name in names}
+            uploaded = {}
+            release_created = [False]
             writes, pushes, edits = [], [], []
             interrupted = [False]
 
             def transport_git(cwd, *args, **kwargs):
                 if args[0] == "push":
-                    self.assertTrue(args[1].startswith("--force-with-lease=refs/tags/v0.1.1:"))
+                    self.assertEqual(args[1], "origin")
                     self.assertEqual(args[-1], "refs/tags/v0.1.1:refs/tags/v0.1.1")
                     pushes.append(args)
                     # No synthetic remote-get-url result: only network push is redirected.
@@ -292,13 +318,21 @@ class ReleaseTests(unittest.TestCase):
                     if "/actions/workflows/" in endpoint:
                         return result(stdout=json.dumps({"workflow_runs": [dict(id=1, head_sha=commit, head_branch="main", event="push", conclusion="success")]}))
                     if "/git/ref/tags/" in endpoint:
-                        sha = original_git(bare, "rev-parse", "refs/tags/v0.1.1").stdout.strip()
+                        ref = original_git(bare, "rev-parse", "refs/tags/v0.1.1", check=False)
+                        if ref.returncode:
+                            return result(code=1, stderr="HTTP 404")
+                        sha = ref.stdout.strip()
                         return result(stdout=json.dumps({"object": {"type": "tag", "sha": sha}}))
                     if "/git/tags/" in endpoint:
                         sha = original_git(bare, "rev-parse", endpoint.rsplit("/", 1)[1] + "^{commit}").stdout.strip()
                         return result(stdout=json.dumps({"object": {"type": "commit", "sha": sha}}))
                     if "/releases/tags/" in endpoint:
-                        return result(stdout=json.dumps({"draft": False, "immutable": False}))
+                        if not release_created[0]:
+                            return result(code=1, stderr="HTTP 404")
+                        return result(stdout=json.dumps({"draft": True, "immutable": False}))
+                elif args[:2] == ("release", "create"):
+                    release_created[0] = True
+                    return result()
                 elif args[:2] == ("release", "view"):
                     return result(stdout=json.dumps({"assets": [{"name": n} for n in uploaded]}))
                 elif args[:2] == ("release", "download"):
@@ -310,7 +344,7 @@ class ReleaseTests(unittest.TestCase):
                         interrupted[0] = True
                         raise publish.PublishError("synthetic interrupted upload")
                     file = Path(args[3])
-                    self.assertIn("--clobber", args)
+                    self.assertNotIn("--clobber", args)
                     uploaded[file.name] = file.read_bytes()
                     writes.append(file.name)
                     return result()
@@ -321,9 +355,7 @@ class ReleaseTests(unittest.TestCase):
 
             with patch.dict(os.environ, env), patch.object(release, "ROOT", checkout), patch.object(
                 publish, "ROOT", checkout
-            ), patch.object(build, "ROOT", checkout), patch.object(build, "PLUGIN", checkout / "ExternalNodeBridge"), patch.object(
-                release, "ORIGINAL_V011", old_commit
-            ), patch.object(release, "git", side_effect=transport_git), patch.object(
+            ), patch.object(build, "ROOT", checkout), patch.object(build, "PLUGIN", checkout / "ExternalNodeBridge"), patch.object(release, "git", side_effect=transport_git), patch.object(
                 publish, "gh", side_effect=fake_gh
             ), patch.object(release, "gh", side_effect=fake_gh), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(publish.PublishError, "interrupted upload"):
@@ -343,24 +375,21 @@ class ReleaseTests(unittest.TestCase):
 
     def test_dispatch_context_rejects_race_and_wrong_actor(self):
         env = dict(INPUT_VERSION="0.1.1", INPUT_COMMIT="a" * 40,
-                   INPUT_CONFIRMATION="REPUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
+                   INPUT_CONFIRMATION="PUBLISH v0.1.1", GITHUB_REPOSITORY=publish.REPO,
                    GITHUB_ACTOR="crowveil", GITHUB_TRIGGERING_ACTOR="crowveil",
                    GITHUB_REF="refs/heads/main", GITHUB_SHA="a" * 40,
                    GITHUB_EVENT_NAME="workflow_dispatch")
-        self.assertEqual(release.validate_request(env), ("0.1.1", "a" * 40, True))
+        self.assertEqual(release.validate_request(env), ("0.1.1", "a" * 40))
         for key, value in (("GITHUB_SHA", "b" * 40), ("GITHUB_ACTOR", "other"),
                            ("GITHUB_TRIGGERING_ACTOR", "other"), ("GITHUB_REF", "refs/tags/v0.1.1")):
             with self.subTest(key=key), self.assertRaises(publish.PublishError):
                 release.validate_request({**env, key: value})
 
-    def test_repair_cannot_replace_unrelated_tag(self):
-        ref = {"object": {"type": "commit", "sha": release.ORIGINAL_V011}}
-        release.check_tag_target(ref, "a" * 40, True)
+    def test_existing_tag_cannot_move(self):
+        ref = {"object": {"type": "commit", "sha": "a" * 40}}
+        release.check_tag_target(ref, "a" * 40)
         with self.assertRaises(publish.PublishError):
-            release.check_tag_target(ref, "a" * 40, False)
-        ref["object"]["sha"] = "b" * 40
-        with self.assertRaises(publish.PublishError):
-            release.check_tag_target(ref, "a" * 40, True)
+            release.check_tag_target(ref, "b" * 40)
 
     def test_tests_gate_rejects_other_sha_and_later_failed_run(self):
         success = dict(id=1, head_sha="a" * 40, head_branch="main", event="push", conclusion="success")
@@ -371,7 +400,7 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(release, "gh", return_value=result(stdout=json.dumps({"workflow_runs": [success]}))):
             release.require_tests("a" * 40)
 
-    def test_asset_upload_interruption_resumes_and_repair_is_explicit(self):
+    def test_asset_upload_interruption_resumes_without_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             assets = [Path(tmp) / name for name in ("plugin.zip", "source.zip", "SHA256SUMS")]
             for file in assets:
@@ -398,16 +427,15 @@ class ReleaseTests(unittest.TestCase):
 
             with patch.object(release, "gh", side_effect=fake_gh):
                 with self.assertRaisesRegex(publish.PublishError, "interrupted"):
-                    release.sync_assets("v0.1.1", assets, False, False)
-                release.sync_assets("v0.1.1", assets, False, False)
+                    release.sync_assets("v0.1.1", assets, False)
+                release.sync_assets("v0.1.1", assets, False)
                 self.assertEqual(len(writes), 3)
-                release.sync_assets("v0.1.1", assets, False, True)
+                release.sync_assets("v0.1.1", assets, True)
                 self.assertEqual(len(writes), 3)
                 uploaded["plugin.zip"] = b"old"
                 with self.assertRaises(publish.PublishError):
-                    release.sync_assets("v0.1.1", assets, False, True)
-                release.sync_assets("v0.1.1", assets, True, True)
-                self.assertEqual(uploaded["plugin.zip"], b"plugin.zip")
+                    release.sync_assets("v0.1.1", assets, True)
+                self.assertEqual(uploaded["plugin.zip"], b"old")
 
     def test_workflow_run_query_is_machine_readable(self):
         payload = [{"databaseId": 1, "headBranch": "main", "headSha": "abc"}]

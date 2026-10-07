@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>XBoard 订阅桥接 · 管理控制台</title>
-    <link rel="stylesheet" href="console.css?v=f5d75af583cd" />
+    <link rel="stylesheet" href="console.css?v=8a094080fe51" />
   </head>
   <body>
     <main>
@@ -38,6 +38,7 @@
         </div>
         <nav aria-label="控制台栏目">
           <button data-tab="sources" class="tab active">订阅来源</button
+          ><button data-tab="accounts" class="tab">上游账户</button
           ><button data-tab="service" class="tab">转换服务</button
           ><button data-tab="diagnostics" class="tab">运行与调试</button>
         </nav>
@@ -49,14 +50,34 @@
             </div>
             <button id="add" class="secondary">＋ 添加来源</button>
           </div>
+          <p id="template-review" class="status-box" hidden></p>
+          <p class="hint">节点分组与分流由 XBoard 后台订阅模板管理。插件不另外创建或指定策略组。</p>
           <div id="sources"></div>
           <p id="empty" class="empty">还没有来源。添加订阅地址并选择可以使用它的权限组。</p>
-          <details>
-            <summary>从旧模板迁移时需要做什么？</summary>
+        </section>
+        <section id="tab-accounts" class="card tabpanel" hidden>
+          <div class="section-head">
+            <div>
+              <h2>上游账户</h2>
+              <p>关联已有来源，查询套餐并更新订阅。遇到安全验证会暂停账户任务并提示。</p>
+            </div>
+            <button id="reload-accounts" class="secondary">更新账户状态</button>
+          </div>
+          <p class="status-box">
+            上游重置会更换整个账户的订阅，影响所有共享该来源的用户。自动轮换默认关闭；开启前请实测旧节点会失效，并告知有效用户更新订阅。
+          </p>
+          <div id="accounts"></div>
+          <p id="accounts-empty" class="empty" hidden>
+            请先到「订阅来源」添加并保存来源，然后关联机场账户。
+          </p>
+          <details class="notification-settings">
+            <summary>Telegram 提醒</summary>
             <p>
-              移除模板中旧外部节点的 proxy-providers 和策略组 use
-              引用，防止绕过权限组继续分发；rule-providers 可以保留。
+              仅发送上游到期、检查异常与轮换结果；可以使用现有机器人，不接管
+              Webhook，也不读取聊天消息。
             </p>
+            <div id="notification-settings"></div>
+            <button id="test-notification" class="secondary">发送测试消息</button>
           </details>
         </section>
         <section id="tab-service" class="card tabpanel" hidden>
@@ -68,41 +89,23 @@
             <button id="health" class="secondary">检测连接与版本</button>
           </div>
           <label>内网地址<input id="converter_url" type="url" required /></label>
+          <button id="preflight" type="button" class="secondary">部署自检</button>
+          <p id="deployment-state" class="hint">检查当前 PHP 进程的资源文件与目录读写权限。</p>
           <p id="version-state" class="status-box">尚未检测版本</p>
           <details>
             <summary>高级设置</summary>
             <div class="form-grid">
               <label>上游请求 User-Agent<input id="upstream_user_agent" type="text" /></label
-              ><label>请求超时（秒）<input id="timeout" type="number" min="2" max="30" /></label
+              ><label>转换请求超时（秒）<input id="timeout" type="number" min="2" max="30" /></label
               ><label
-                >缓存最长保留（小时）<input id="max_stale" type="number" min="1" max="168"
+                >缓存最大有效时长（小时）<input id="max_stale" type="number" min="1" max="168"
               /></label>
             </div>
             <p>
               默认 clash.meta 用于请求上游 Mihomo 格式，保留 XHTTP
-              等扩展字段；它不改变最终输出格式。修改地址或 UA 后需保存并刷新。
+              等扩展字段；它不改变最终输出格式。修改地址或 UA
+              后需保存并刷新。缓存有效时长从最后成功刷新起计算，不是刷新间隔或套餐有效期。
             </p>
-            <label
-              >Clash／Clash Meta／Stash 接收策略组（每行一个）<textarea
-                id="mihomo_groups"
-                rows="4"
-              ></textarea></label
-            ><label
-              >Sing-box 接收策略组（留空：所有 selector／urltest）<textarea
-                id="singbox_groups"
-                rows="2"
-              ></textarea></label
-            ><label
-              >Surge／Surfboard 接收策略组（留空：所有可选择的策略组）<textarea
-                id="ini_groups"
-                rows="2"
-              ></textarea></label
-            ><label
-              >要移除的旧节点 provider 名称（每行一个）<textarea
-                id="remove_provider_keys"
-                rows="2"
-              ></textarea>
-            </label>
           </details>
         </section>
         <section id="tab-diagnostics" class="card tabpanel" hidden>
@@ -154,6 +157,7 @@
         ><button id="cancel-close" class="secondary">继续编辑</button>
       </div>
     </dialog>
-    <script src="console.js?v=1120365e9e10" defer></script>
+    <script src="accounts.js?v=09e1d88bb286" defer></script>
+    <script src="console.js?v=dd075f9f46f6" defer></script>
   </body>
 </html>

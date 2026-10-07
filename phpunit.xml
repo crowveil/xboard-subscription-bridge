@@ -3,6 +3,7 @@
     <testsuites>
         <testsuite name="XBoard Subscription Bridge">
             <directory>tests</directory>
+            <exclude>tests/runtime</exclude>
         </testsuite>
     </testsuites>
 </phpunit>

@@ -17,14 +17,14 @@ final class LifecycleTest extends BridgeTestCase
         $this->assertTrue($manager->enable('external_node_bridge'));
         $this->assertSame([], Plugin\ExternalNodeBridge\Services\Settings::load()['sources']);
         $routes = collect(app('router')->getRoutes()->getRoutes())->filter(fn ($r) => str_starts_with($r->uri(), 'api/v1/external-node-bridge/admin/'));
-        $this->assertCount(10, $routes);
+        $this->assertCount(15, $routes);
         foreach ($routes as $route) {
             $this->assertContains('api', $route->middleware());
             $this->assertContains('admin', $route->middleware());
         }
         $schedule = new Illuminate\Console\Scheduling\Schedule();
         $manager->registerPluginSchedules($schedule);
-        $this->assertCount(1, $schedule->events());
+        $this->assertCount(2, $schedule->events());
         $this->assertSame('* * * * *', $schedule->events()[0]->expression);
         $this->assertTrue($schedule->events()[0]->withoutOverlapping);
         $this->assertTrue($manager->disable('external_node_bridge'));
@@ -38,7 +38,9 @@ final class LifecycleTest extends BridgeTestCase
         unset($c['upstream_user_agent']);
         $this->saveSettings($c);
         $dir = public_path('plugins/external_node_bridge');
-        mkdir($dir, 0700, true);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0700, true);
+        }
         file_put_contents($dir.'/console.html', 'old UI');
         $this->assertTrue(app(App\Services\Plugin\PluginManager::class)->update('external_node_bridge'));
         $this->assertStringContainsString('id="plugin-version"', file_get_contents($dir.'/console.html'));

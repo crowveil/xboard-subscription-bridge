@@ -100,6 +100,9 @@ button:hover,
 }
 button:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+#workspace[aria-busy='true'] button:disabled {
   cursor: wait;
 }
 .secondary {
@@ -118,6 +121,7 @@ button:disabled {
 }
 nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 20px 0 0;
   border-bottom: 1px solid var(--line);
@@ -138,6 +142,7 @@ label {
   margin: 12px 0;
 }
 input,
+select,
 textarea {
   display: block;
   width: 100%;
@@ -154,6 +159,7 @@ textarea {
   overflow-wrap: anywhere;
 }
 input:focus,
+select:focus,
 textarea:focus,
 button:focus-visible,
 a:focus-visible {
@@ -170,7 +176,7 @@ input[type='checkbox'] {
 }
 .form-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 6px 24px;
 }
 .source {
@@ -227,6 +233,36 @@ details {
 summary {
   cursor: pointer;
   font-weight: 600;
+}
+.account {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fcfdfd;
+  padding: 18px 22px;
+}
+.account > summary {
+  overflow-wrap: anywhere;
+  color: var(--teal);
+}
+.account > .actions {
+  margin-top: 20px;
+}
+.account-alert {
+  color: #973824;
+  background: #fff0ed;
+  padding: 12px;
+  border-radius: 8px;
+  margin-top: 14px;
+}
+.account-check {
+  font-weight: 500;
+}
+label small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
 }
 pre {
   font:
@@ -312,6 +348,7 @@ dialog::backdrop {
     gap: 12px;
   }
   .card,
+  .account,
   .source {
     padding: 18px;
   }

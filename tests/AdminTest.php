@@ -5,6 +5,22 @@ use Plugin\ExternalNodeBridge\Services\{Diagnostics, Settings};
 
 final class AdminTest extends BridgeTestCase
 {
+    public function testSavingFormatsReconcilesPendingRefreshUnderSourceLock(): void
+    {
+        app('auth')->admin = (object) ['is_admin' => true];
+        $store = \Plugin\ExternalNodeBridge\Services\Upstream\AccountStore::class;
+        $store::save('a', ['enabled' => true, 'panel_url' => 'https://panel.example', 'auth_mode' => 'token', 'authorization' => 'synthetic-auth'], null);
+        $state = $store::read('a');
+        $state['refresh_pending'] = ['mihomo', 'singbox'];
+        $store::write('a', $state);
+        $settings = Settings::load();
+        $revision = Settings::revision($settings);
+        $settings['sources'][0]['targets'] = ['mihomo'];
+        $response = $this->callAdmin('POST', 'settings', ['config' => $settings, 'revision' => $revision]);
+        $this->assertSame(200, $response->getStatusCode(), $response->getContent());
+        $this->assertSame(['mihomo'], $store::read('a')['refresh_pending']);
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -19,15 +35,18 @@ final class AdminTest extends BridgeTestCase
         if (!collect($router->getRoutes()->getRoutes())->contains(fn ($r) => str_ends_with($r->uri(), '/admin/settings'))) {
             require dirname(__DIR__).'/ExternalNodeBridge/routes/api.php';
         }
-        $request = Request::create('/api/v1/external-node-bridge/admin/'.$path, $method, $body);
+        $request = Request::create('/api/v1/external-node-bridge/admin/'.$path, $method, [], [], [], ['CONTENT_TYPE' => 'application/json'], json_encode($body));
         $request->headers->set('Accept', 'application/json');
         app()->instance('request', $request);
-        return $router->dispatch($request);
+        return (new Illuminate\Pipeline\Pipeline(app()))->send($request)->through([
+            Illuminate\Foundation\Http\Middleware\TrimStrings::class,
+            Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
+        ])->then(fn ($r) => $router->dispatch($r));
     }
 
     public function testEveryAdminRouteRejectsAnonymousAndOrdinaryUsers(): void
     {
-        $routes = [['GET','session'],['POST','renew'],['POST','close'],['GET','settings'],['POST','settings'],['POST','debug'],['GET','status'],['GET','export'],['POST','health'],['POST','refresh']];
+        $routes = [['GET','session'],['POST','renew'],['POST','close'],['GET','settings'],['POST','settings'],['POST','debug'],['GET','status'],['GET','export'],['POST','health'],['POST','refresh'],['GET','accounts'],['POST','account-save'],['POST','account-action'],['POST','notifications'],['POST','preflight']];
         foreach ([null, (object)['is_admin' => false]] as $user) {
             app('auth')->admin = $user;
             foreach ($routes as [$method,$path]) {
@@ -82,5 +101,23 @@ final class AdminTest extends BridgeTestCase
         $this->assertStringNotContainsString('UPSTREAM_SECRET', $response->getContent());
         $this->assertSame(200, $this->callAdmin('POST', 'debug', ['enabled' => false])->getStatusCode());
         $this->assertFalse((new Diagnostics(Settings::load()))->active());
+    }
+
+    public function testNestedCredentialsSurviveRealLaravelMiddlewareAndBlankResave(): void
+    {
+        app('auth')->admin = (object)['is_admin' => true];
+        $config = ['panel_url' => 'https://panel.example/#/login', 'email' => 'tester@example.com', 'password' => '  private password  ', 'authorization' => '', 'cookie' => '', 'api_url' => ''];
+        $r = $this->callAdmin('POST', 'account-save', ['source_id' => 'a', 'config' => $config]);
+        $this->assertSame(200, $r->getStatusCode(), $r->getContent());
+        $a = json_decode($r->getContent(), true)['account'];
+        $this->assertSame('  private password  ', Plugin\ExternalNodeBridge\Services\Upstream\AccountStore::read('a')['config']['password']);
+        $config['password'] = '';
+        $r = $this->callAdmin('POST', 'account-save', ['source_id' => 'a', 'config' => $config, 'revision' => $a['revision']]);
+        $this->assertSame(200, $r->getStatusCode(), $r->getContent());
+        $a = json_decode($r->getContent(), true)['account'];
+        $this->assertSame('  private password  ', Plugin\ExternalNodeBridge\Services\Upstream\AccountStore::read('a')['config']['password']);
+        $config['password'] = "bad\n";
+        $r = $this->callAdmin('POST', 'account-save', ['source_id' => 'a', 'config' => $config, 'revision' => $a['revision']]);
+        $this->assertSame('UPSTREAM_CREDENTIAL_CONTROL_CHARACTERS', json_decode($r->getContent(), true)['error']);
     }
 }

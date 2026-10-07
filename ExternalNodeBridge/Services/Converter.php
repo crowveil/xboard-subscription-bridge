@@ -72,6 +72,7 @@ final class Converter
 
     private function request(string $path, array $query, array $headers = []): string
     {
+        Settings::requireEnabled();
         try {
             $deadline = microtime(true) + $this->config['timeout'];
             $r = Http::withOptions(['stream' => true, 'allow_redirects' => false, 'read_timeout' => $this->config['timeout']])
@@ -82,9 +83,6 @@ final class Converter
                 ->get($this->config['converter_url'].$path, $query);
             $stream = $r->toPsrResponse()->getBody();
             try {
-                if (!$r->successful()) {
-                    throw new BridgeException('CONVERTER_HTTP_ERROR', $r->status());
-                }
                 $result = '';
                 while (!$stream->eof()) {
                     if (microtime(true) > $deadline) {
@@ -98,6 +96,13 @@ final class Converter
                     if (strlen($result) > Merger::MAX_BYTES) {
                         throw new BridgeException('RESPONSE_TOO_LARGE');
                     }
+                }
+                if (!$r->successful()) {
+                    $noNodes = "Invalid request: none of the parsed proxy nodes can be represented by the selected output target.\n无效请求：解析到的代理节点均无法由所选输出目标表示。";
+                    if ($path === '/sub' && $r->status() === 400 && str_replace("\r\n", "\n", trim($result)) === $noNodes) {
+                        throw new BridgeException('NO_COMPATIBLE_NODES');
+                    }
+                    throw new BridgeException('CONVERTER_HTTP_ERROR', $r->status());
                 }
                 return $result;
             } finally {

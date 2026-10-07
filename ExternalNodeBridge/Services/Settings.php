@@ -13,9 +13,15 @@ final class Settings
     public static function defaults(): array
     {
         return ['converter_url' => 'http://subconverter-extended:25500', 'upstream_user_agent' => 'clash.meta',
-            'cache_revision' => 'sce-v1.9.5', 'debug' => false, 'debug_until' => 0, 'sources' => [],
-            'mihomo_groups' => ['🚀 节点选择', '♻️ 自动选择', '🤖 AI服务', 'GLOBAL'], 'singbox_groups' => [],
-            'ini_groups' => [], 'remove_provider_keys' => [], 'timeout' => 15, 'max_stale' => 86400];
+            'cache_revision' => 'nodes-v2', 'debug' => false, 'debug_until' => 0, 'sources' => [],
+            'retired_provider_keys' => [], 'timeout' => 15, 'max_stale' => 86400];
+    }
+
+    public static function requireEnabled(): void
+    {
+        if (!Plugin::query()->where('code', self::CODE)->where('is_enabled', true)->exists()) {
+            throw new BridgeException('PLUGIN_DISABLED');
+        }
     }
 
     public static function load(): array
@@ -27,8 +33,7 @@ final class Settings
         $raw = self::raw($row);
         return PrivateStore::locked('settings', function () use ($raw) {
             $stored = PrivateStore::read('settings');
-            // Before the native form can replace its JSON, move legacy fields
-            // to private storage. Leave the legacy revision intact for caches.
+            // Private storage owns source settings; the native form owns its declared fields.
             if (!$stored) {
                 $stored = self::normalize($raw);
                 PrivateStore::write('settings', $stored);
@@ -47,8 +52,11 @@ final class Settings
     public static function normalize(array $raw): array
     {
         $defaults = self::defaults();
+        if (!isset($raw['retired_provider_keys']) && isset($raw['remove_provider_keys'])) {
+            $raw['retired_provider_keys'] = $raw['remove_provider_keys'];
+        }
         $c = array_replace($defaults, array_intersect_key($raw, $defaults));
-        foreach (['sources', 'mihomo_groups', 'singbox_groups', 'ini_groups', 'remove_provider_keys'] as $key) {
+        foreach (['sources', 'retired_provider_keys'] as $key) {
             if (is_string($c[$key])) {
                 $c[$key] = json_decode($c[$key], true);
             }
@@ -56,7 +64,7 @@ final class Settings
                 throw new BridgeException('CONFIG_INVALID');
             }
         }
-        foreach (['mihomo_groups', 'singbox_groups', 'ini_groups', 'remove_provider_keys'] as $key) {
+        foreach (['retired_provider_keys'] as $key) {
             if (count($c[$key]) > 100) {
                 throw new BridgeException('CONFIG_INVALID');
             }
@@ -134,14 +142,44 @@ final class Settings
             && in_array($target, $s['targets'], true)));
     }
 
-    public static function save(array $c): void
+    public static function revision(array $c): string
+    {
+        return hash_hmac('sha256', json_encode(self::normalize($c)), (string) config('app.key'));
+    }
+
+    public static function save(array $c, ?string $expectedRevision = null): void
     {
         $c = self::normalize($c);
-        PrivateStore::locked('settings', fn () => PrivateStore::write('settings', $c));
+        PrivateStore::locked('settings', function () use ($c, $expectedRevision) {
+            $current = self::normalize(array_replace(PrivateStore::read('settings'), array_intersect_key(self::raw(), ['converter_url' => true])));
+            if ($expectedRevision !== null && !hash_equals(self::revision($current), $expectedRevision)) {
+                throw new BridgeException('SETTINGS_CHANGED');
+            }
+            PrivateStore::write('settings', $c);
+        });
         // Preserve access state; saving the console can never reopen it.
         $raw = self::raw();
         $raw['converter_url'] = $c['converter_url'];
         app(PluginConfigService::class)->updateConfig(self::CODE, $raw);
+    }
+
+    public static function replaceSourceUrl(string $id, string $expectedUrl, string $url): void
+    {
+        PrivateStore::locked('settings', function () use ($id, $expectedUrl, $url) {
+            $c = self::normalize(PrivateStore::read('settings'));
+            foreach ($c['sources'] as &$source) {
+                if ($source['id'] !== $id) {
+                    continue;
+                }
+                if ($source['url'] !== $expectedUrl) {
+                    throw new BridgeException('SETTINGS_CHANGED');
+                }
+                $source['url'] = $url;
+                PrivateStore::write('settings', self::normalize($c));
+                return;
+            }
+            throw new BridgeException('SOURCE_NOT_FOUND');
+        });
     }
 
     public static function httpUrl(string $url): bool

@@ -20,7 +20,11 @@ final class Diagnostics
     public function dir(): string
     {
         $dir = $this->directory ?? storage_path('app/external-node-bridge');
-        if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+        try {
+            if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) {
+                throw new BridgeException('STORAGE_UNAVAILABLE');
+            }
+        } catch (\Throwable) {
             throw new BridgeException('STORAGE_UNAVAILABLE');
         }
         return $dir;

@@ -18,11 +18,12 @@ gh auth status
 准备好版本号、CHANGELOG、`docs/releases/v<版本>.md`，并把 `RELEASE_BASE` 更新为修改所基于的远端 `main` 完整提交 SHA。然后运行：
 
 ```bash
+bash publish.sh --notes
 bash publish.sh --check
 bash publish.sh
 ```
 
-第一条命令仅核验账号、远端、版本、控制台资源散列以及待提交差异，不进行远端写操作。正式发布要求输入 `PUBLISH v<版本>`。
+`--notes` 离线显示当前版本的完整升级说明，不需要 gh 登录；同一文件会作为 GitHub Release 正文。`--check` 仅核验账号、远端、版本、控制台资源散列以及待提交差异，不进行远端写操作。正式发布要求输入 `PUBLISH v<版本>`。
 
 脚本随后：
 
@@ -32,20 +33,9 @@ bash publish.sh
 4. `Release` 工作流再次确认这个精确提交已有成功的 `Tests` 记录，然后执行确定性打包。
 5. 检查通过后才创建标签和 Release 草稿；上传并重新下载三个附件核对 SHA256 后公开发布。
 
-已经公开的版本默认不可覆盖；发现问题时应递增补丁版本。
+已经公开的版本不可覆盖；发现问题时应递增补丁版本。
 
-## 一次性修正 v0.1.1
-
-早期 `v0.1.1` 的本地重发脚本错误地要求 Debian 安装 PHP、Composer、Node.js 和 npm。修正版源码提供一次性入口：
-
-```bash
-bash publish.sh --check
-bash publish.sh --repair-0.1.1
-```
-
-正式执行时输入 `REPUBLISH v0.1.1`。只有 `v0.1.1` 允许走这条覆盖路径，并且旧标签必须指向原始发布提交 `01eabc2eccc89e068a486980c08e2b2e4def2391` 或本次待发布提交。工作流使用带旧标签对象 SHA 的 `--force-with-lease`，标签在验证期间被其他操作修改时会停止。已有公开 Release 的附件只会在测试和打包通过后逐一覆盖，不能保证三个附件同时替换；网络中断时重新运行同一命令即可继续校验和补齐。GitHub 的不可变 Release 设置如果禁止覆盖，脚本会停止，不尝试绕过。
-
-本次只使用根目录的 `publish.sh`，不要从旧下载包复制 `republish-v0.1.1.sh`。`--check` 不运行 PHP 测试；最终检查由 GitHub Actions 执行。
+开发包带有 `release_channel: development`，发布脚本在联网之前停止，包括 `--check`。完成正式版验收后再更新 manifest 和发布说明。没有覆盖已发布版本的特殊入口；标签和已有附件内容不一致时停止，要求递增版本。
 
 ## Actions 分工
 

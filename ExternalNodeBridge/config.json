@@ -1,7 +1,7 @@
 {
   "name": "订阅桥接",
   "code": "external_node_bridge",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "feature",
   "description": "按 XBoard 权限组分发外部节点。在配置页复制控制台地址；关闭控制台不影响订阅。",
   "author": "crowveil",

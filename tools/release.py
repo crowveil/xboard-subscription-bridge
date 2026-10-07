@@ -10,9 +10,6 @@ import tempfile
 
 from publish import EMAIL, NAME, REPO, ROOT, PublishError, api_optional, gh, git, identity, remote
 
-ORIGINAL_V011 = "01eabc2eccc89e068a486980c08e2b2e4def2391"
-
-
 def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -45,20 +42,16 @@ def validate_request(env):
     ):
         raise PublishError("Unexpected repository, actor, event, branch or commit.")
     confirmation = env.get("INPUT_CONFIRMATION")
-    repair = version == "0.1.1" and confirmation == "REPUBLISH v0.1.1"
-    if not repair and confirmation != f"PUBLISH v{version}":
+    if confirmation != f"PUBLISH v{version}":
         raise PublishError("Release confirmation does not match.")
-    return version, commit, repair
+    return version, commit
 
 
-def check_tag_target(ref, commit, repair):
+def check_tag_target(ref, commit):
     if ref is None:
-        if repair:
-            raise PublishError("Repair requires the original tag.")
         return
     target = resolve_tag(ref)
-    allowed = {commit, ORIGINAL_V011} if repair else {commit}
-    if target not in allowed:
+    if target != commit:
         raise PublishError("Tag points to another commit; refusing to overwrite it.")
 
 
@@ -73,7 +66,7 @@ def require_tests(commit):
         raise PublishError("Latest Tests run for this exact main commit has not succeeded.")
 
 
-def sync_assets(tag, assets, replace, published):
+def sync_assets(tag, assets, published):
     release = json.loads(gh("release", "view", tag, "--repo", REPO, "--json", "assets").stdout)
     actual = {a["name"] for a in release["assets"]}
     wanted = {p.name for p in assets}
@@ -87,13 +80,10 @@ def sync_assets(tag, assets, replace, published):
                    "--pattern", path.name, "--dir", directory)
                 if sha256(downloaded) == sha256(path):
                     continue
-                if not replace:
-                    raise PublishError(f"Existing asset differs: {path.name}")
-            elif published and not replace:
+                raise PublishError(f"Existing asset differs: {path.name}")
+            elif published:
                 raise PublishError(f"Published release is missing asset: {path.name}")
             args = ["release", "upload", tag, str(path), "--repo", REPO]
-            if replace:
-                args.append("--clobber")
             gh(*args)
             gh("release", "download", tag, "--repo", REPO,
                "--pattern", path.name, "--dir", directory, "--clobber")
@@ -102,8 +92,10 @@ def sync_assets(tag, assets, replace, published):
 
 
 def release():
-    version, commit, repair = validate_request(os.environ)
+    version, commit = validate_request(os.environ)
     manifest = json.loads((ROOT / "ExternalNodeBridge/config.json").read_text())
+    if manifest.get("release_channel") == "development":
+        raise PublishError("内部开发版仅供安装测试，不允许创建正式 Release。")
     if manifest["version"] != version or manifest["code"] != "external_node_bridge":
         raise PublishError("Manifest does not match the requested release.")
     if git(ROOT, "rev-parse", "HEAD").stdout.strip() != commit:
@@ -122,10 +114,8 @@ def release():
     if head_identity != f"{NAME}|{EMAIL}|{NAME}|{EMAIL}":
         raise PublishError("Release commit identity does not match crowveil.")
     ref = api_optional(f"repos/{REPO}/git/ref/tags/{tag}")
-    check_tag_target(ref, commit, repair)
+    check_tag_target(ref, commit)
     existing = api_optional(f"repos/{REPO}/releases/tags/{tag}")
-    if repair and existing is None:
-        raise PublishError("Repair requires the existing Release.")
     if existing and existing.get("immutable"):
         raise PublishError("GitHub release is immutable; publish a new version instead.")
 
@@ -140,14 +130,12 @@ def release():
         raise PublishError("Build modified tracked sources.")
 
     # Preserve an already-correct annotated tag during retries.
-    if ref is None or resolve_tag(ref) != commit:
+    if ref is None:
         identity(ROOT)
         remote(ROOT)
-        git(ROOT, "tag", "--force", "--annotate", tag,
+        git(ROOT, "tag", "--annotate", tag,
             "--message", f"XBoard Subscription Bridge {version}", commit)
-        old_object = ref["object"]["sha"] if ref else ""
-        git(ROOT, "push", f"--force-with-lease=refs/tags/{tag}:{old_object}",
-            "origin", f"refs/tags/{tag}:refs/tags/{tag}")
+        git(ROOT, "push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
 
     if existing is None:
         gh("release", "create", tag, "--repo", REPO, "--verify-tag", "--draft",
@@ -156,8 +144,8 @@ def release():
     dist = ROOT / "dist" / version
     assets = [dist / f"ExternalNodeBridge-{version}.zip",
               dist / f"xboard-subscription-bridge-{version}-source.zip", dist / "SHA256SUMS"]
-    sync_assets(tag, assets, replace=repair, published=not existing["draft"])
-    if repair or existing["draft"]:
+    sync_assets(tag, assets, published=not existing["draft"])
+    if existing["draft"]:
         identity(ROOT)
         gh("release", "edit", tag, "--repo", REPO, "--draft=false", "--latest",
            "--title", f"XBoard Subscription Bridge {version}", "--notes-file", str(notes))

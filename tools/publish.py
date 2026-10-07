@@ -18,7 +18,6 @@ URL = f"https://github.com/{REPO}.git"
 NAME = "crowveil"
 EMAIL = "330225440+crowveil@users.noreply.github.com"
 BRANCH = "main"
-REPAIR_VERSION = "0.1.1"
 
 
 class PublishError(RuntimeError):
@@ -167,7 +166,7 @@ def watch(run_id):
         raise PublishError(f"Actions run {run_id} 未成功；请查看上方链接，不会继续发布。")
 
 
-def dispatch_release(version, commit, replace_existing, attempts=60, delay=5):
+def dispatch_release(version, commit, attempts=60, delay=5):
     current = api_optional(f"repos/{REPO}/git/ref/heads/main")
     if current is None or current["object"]["sha"] != commit:
         raise PublishError("main 在测试期间已变化；不会发布其他提交。")
@@ -176,7 +175,7 @@ def dispatch_release(version, commit, replace_existing, attempts=60, delay=5):
         for item in workflow_runs("release.yml", commit, "workflow_dispatch")
     }
     tag = f"v{version}"
-    confirmation = f"REPUBLISH {tag}" if replace_existing else f"PUBLISH {tag}"
+    confirmation = f"PUBLISH {tag}"
     account()
     gh(
         "workflow",
@@ -208,26 +207,21 @@ def dispatch_release(version, commit, replace_existing, attempts=60, delay=5):
     raise PublishError("等待 Release 工作流创建超时。")
 
 
-def validate_release_state(version, replace_existing, check_only=False):
-    tag = f"v{version}"
-    tag_ref = api_optional(f"repos/{REPO}/git/ref/tags/{tag}")
-    release = api_optional(f"repos/{REPO}/releases/tags/{tag}")
-    if replace_existing:
-        if version != REPAIR_VERSION:
-            raise PublishError("只允许对 v0.1.1 执行一次性修正；其他版本必须递增版本号。")
-        if tag_ref is None or release is None:
-            raise PublishError("v0.1.1 的标签或 Release 不存在，不能执行修正发布。")
-    elif not check_only and release is not None and not release.get("draft", False):
+def validate_release_state(version, check_only=False):
+    release = api_optional(f"repos/{REPO}/releases/tags/v{version}")
+    if not check_only and release is not None and not release.get("draft", False):
         raise PublishError("版本已经发布；请递增版本号，不会覆盖旧版本。")
 
 
-def publish(check_only=False, replace_existing=False):
+def publish(check_only=False):
     print("publish.sh：GitHub Actions 发布模式；本机无需 PHP、Composer、Node 或 npm。", flush=True)
+    manifest = json.loads((ROOT / "ExternalNodeBridge/config.json").read_text())
+    if manifest.get("release_channel") == "development":
+        raise PublishError("内部开发版仅供安装测试，不允许创建正式 Release。")
     for command in ("git", "gh"):
         if shutil.which(command) is None:
             raise PublishError(f"缺少 {command}，请先安装。")
 
-    manifest = json.loads((ROOT / "ExternalNodeBridge/config.json").read_text())
     version = manifest["version"]
     if (
         not re.fullmatch(r"\d+\.\d+\.\d+", version)
@@ -241,6 +235,7 @@ def publish(check_only=False, replace_existing=False):
     if not notes.is_file():
         raise PublishError(f"缺少发布说明 {notes.relative_to(ROOT)}。")
 
+    print(notes.read_text(encoding="utf-8"), flush=True)
     account()
     metadata = json.loads(
         gh("repo", "view", REPO, "--json", "nameWithOwner,defaultBranchRef").stdout
@@ -252,7 +247,7 @@ def publish(check_only=False, replace_existing=False):
         raise PublishError("远端仓库或默认分支不是预期的 crowveil 仓库 / main。")
     if git(ROOT, "ls-remote", "--get-url", URL).stdout.strip() != URL:
         raise PublishError("Git URL 被全局规则重写，已停止；脚本不会修改全局设置。")
-    validate_release_state(version, replace_existing, check_only)
+    validate_release_state(version, check_only)
     print(run([sys.executable, "tools/build.py", "--check"]).stdout, end="")
 
     with tempfile.TemporaryDirectory(prefix="bridge-publish-") as directory:
@@ -304,7 +299,7 @@ def publish(check_only=False, replace_existing=False):
                 raise PublishError("远端历史不符合本次发布的中断恢复条件。")
 
         existing_tag = api_optional(f"repos/{REPO}/git/ref/tags/v{version}")
-        if existing_tag is not None and not replace_existing and not check_only:
+        if existing_tag is not None and not check_only:
             from release import resolve_tag
             if changed or resolve_tag(existing_tag) != remote_head:
                 raise PublishError("已有标签不对应当前源码，不能继续；请递增版本号。")
@@ -326,18 +321,14 @@ def publish(check_only=False, replace_existing=False):
             return
 
         tag = f"v{version}"
-        expected = f"REPUBLISH {tag}" if replace_existing else f"PUBLISH {tag}"
+        expected = f"PUBLISH {tag}"
         if input(f"确认后请输入 {expected}：").strip() != expected:
             raise PublishError("确认文字不匹配，已取消。")
 
         account()
         identity(checkout)
         if changed:
-            subject = (
-                f"Repair {tag}: move release verification to GitHub Actions"
-                if replace_existing
-                else f"Prepare {tag} release"
-            )
+            subject = f"Prepare {tag} release"
             git(checkout, "commit", "--no-gpg-sign", "-m", subject)
             identity(checkout)
             print(git(checkout, "log", "-1", "--format=fuller").stdout)
@@ -348,7 +339,7 @@ def publish(check_only=False, replace_existing=False):
         commit = git(checkout, "rev-parse", "HEAD").stdout.strip()
         identity(checkout)
         wait_for_tests(commit)
-        dispatch_release(version, commit, replace_existing)
+        dispatch_release(version, commit)
         print(f"发布完成：https://github.com/{REPO}/releases/tag/{tag}")
 
 
@@ -360,14 +351,18 @@ def main():
         "--check", action="store_true", help="只检查身份和差异，不进行远端写操作"
     )
     parser.add_argument(
-        "--repair-0.1.1",
-        dest="replace_existing",
-        action="store_true",
-        help="仅用于修正已经发布的 v0.1.1",
+        "--notes", action="store_true", help="离线显示当前版本升级说明，不检查账号或推送"
     )
     args = parser.parse_args()
     try:
-        publish(args.check, args.replace_existing)
+        if args.notes:
+            manifest = json.loads((ROOT / "ExternalNodeBridge/config.json").read_text())
+            version = manifest["version"]
+            if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+                raise PublishError("版本号不正确。")
+            print((ROOT / f"docs/releases/v{version}.md").read_text(encoding="utf-8"))
+            return 0
+        publish(args.check)
     except (
         PublishError,
         OSError,

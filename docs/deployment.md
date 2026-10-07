@@ -30,4 +30,17 @@ php artisan external-nodes:manage diagnose
 
 把同一外部来源从旧模板的 `proxy-providers` 和策略组 `use` 引用中移除，避免客户端另行获取重复来源或绕过插件的组授权。分流用的 `rule-providers` 可以保留。
 
-备份数据库、`storage/app/external-node-bridge` 和原 `APP_KEY`。正常升级使用 XBoard 插件上传机制，随后重启 PHP / Octane 等常驻进程。早期内部版本使用 [迁移工具](migration.md)。
+备份数据库、`storage/app/external-node-bridge` 和原 `APP_KEY`。正常升级使用 XBoard 插件上传机制，随后重启 PHP / Octane 等常驻进程。不要卸载插件后重装。若曾配置旧 provider 自动清理，请检查模板，避免对应格式被升级检查暂停。
+
+## 重建与存储
+
+容器重建保留插件代码所在目录、数据库、`storage/app/external-node-bridge` 与原 `APP_KEY`。公开静态目录缺失时，启用插件的启动流程从本地代码恢复；已存在的目录不会逐文件检查或覆盖。升级会发布最新完整资源。
+
+控制台「部署自检」验证 Web 进程读写，CLI 自检验证调用者身份：
+
+```bash
+php artisan external-nodes:manage selfcheck
+php artisan external-nodes:manage repair-assets
+```
+
+挂载持久性无法由一次文件自检确认，请核对 Compose/1Panel 挂载配置。root 的写入成功不证明 PHP 用户可写。`PRIVATE_STATE_UNREADABLE` 表示数据无法解密或内容损坏；先恢复原密钥和备份，不删除原数据。修复资源不会改动私有设置。

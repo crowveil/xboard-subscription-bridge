@@ -7,8 +7,12 @@ final class Metadata
 {
     public static function version(): string
     {
-        $manifest = json_decode(file_get_contents(dirname(__DIR__).'/config.json'), true, 64, JSON_THROW_ON_ERROR);
+        return self::release()['version'];
+    }
 
-        return $manifest['version'];
+    public static function release(): array
+    {
+        $m = json_decode(file_get_contents(dirname(__DIR__).'/config.json'), true, 64, JSON_THROW_ON_ERROR);
+        return ['version' => $m['version'], 'channel' => $m['release_channel'] ?? 'stable', 'target_version' => $m['target_version'] ?? $m['version']];
     }
 }
